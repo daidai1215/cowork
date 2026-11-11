@@ -1,0 +1,9 @@
+# Runtime prompt / temp artifacts
+.orchestra-prompt-*.md
+*.tmp
+*.bak
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini

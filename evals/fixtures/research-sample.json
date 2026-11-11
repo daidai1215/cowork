@@ -1,0 +1,137 @@
+{
+  "model_id": "fake-model-9",
+  "family": "google-gemini",
+  "generation": "5",
+  "vendor": "google",
+  "channel": "agy",
+  "tier": "flagship",
+  "supersedes": null,
+  "caps": {
+    "code_rigor": {
+      "score": 8,
+      "vs_incumbent": -2,
+      "confidence": 0.7,
+      "evidence": [
+        {
+          "url": "https://example.org/model-orchestra/fixture",
+          "claim": "Synthetic fixture only: code_rigor score is 8.",
+          "date": "2026-11-10"
+        }
+      ]
+    },
+    "backend": {
+      "score": 8,
+      "vs_incumbent": -2,
+      "confidence": 0.7,
+      "evidence": [
+        {
+          "url": "https://example.org/model-orchestra/fixture",
+          "claim": "Synthetic fixture only: backend score is 8.",
+          "date": "2026-11-10"
+        }
+      ]
+    },
+    "math": {
+      "score": 8,
+      "vs_incumbent": -1,
+      "confidence": 0.7,
+      "evidence": [
+        {
+          "url": "https://example.org/model-orchestra/fixture",
+          "claim": "Synthetic fixture only: math score is 8.",
+          "date": "2026-11-10"
+        }
+      ]
+    },
+    "image_gen": {
+      "score": 0,
+      "vs_incumbent": -10,
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "url": "https://example.org/model-orchestra/fixture",
+          "claim": "Synthetic fixture only: no image_gen tool.",
+          "date": "2026-11-10"
+        }
+      ]
+    },
+    "frontend_aesthetic": {
+      "score": 7,
+      "vs_incumbent": -3,
+      "confidence": 0.7,
+      "evidence": [
+        {
+          "url": "https://example.org/model-orchestra/fixture",
+          "claim": "Synthetic fixture only: frontend_aesthetic score is 7.",
+          "date": "2026-11-10"
+        }
+      ]
+    },
+    "prose": {
+      "score": 9,
+      "vs_incumbent": -1,
+      "confidence": 0.7,
+      "evidence": []
+    },
+    "world_knowledge": {
+      "score": 10,
+      "vs_incumbent": 0,
+      "confidence": 0.7,
+      "evidence": [
+        {
+          "url": "https://example.org/model-orchestra/fixture",
+          "claim": "Synthetic fixture only: ties the incumbent at 10.",
+          "date": "2026-11-10"
+        }
+      ]
+    },
+    "long_context": {
+      "score": 10,
+      "vs_incumbent": 0,
+      "confidence": 0.7,
+      "evidence": [
+        {
+          "url": "https://example.org/model-orchestra/fixture",
+          "claim": "Synthetic fixture only: long_context score is 10.",
+          "date": "2026-11-10"
+        }
+      ]
+    },
+    "agentic_coding": {
+      "score": 8,
+      "vs_incumbent": -1,
+      "confidence": 0.7,
+      "evidence": [
+        {
+          "url": "https://example.org/model-orchestra/fixture",
+          "claim": "Synthetic fixture only: agentic_coding score is 8.",
+          "date": "2026-11-10"
+        }
+      ]
+    },
+    "office_docs": {
+      "score": 5,
+      "vs_incumbent": -4,
+      "confidence": 0.7,
+      "evidence": [
+        {
+          "url": "https://example.org/model-orchestra/fixture",
+          "claim": "Synthetic fixture only: office_docs score is 5.",
+          "date": "2026-11-10"
+        }
+      ]
+    }
+  },
+  "speed_rank_hint": 3,
+  "quota_rank_hint": 3,
+  "notable_strengths": [
+    "Synthetic fixture; never use as real model research."
+  ],
+  "notable_weaknesses": [
+    "No prose evidence is supplied."
+  ],
+  "suggested_hard_rules": [],
+  "sources_checked": [
+    "https://example.org/model-orchestra/fixture"
+  ]
+}
