@@ -7,10 +7,19 @@ description: 【多模型协同总调度】在 GPT-6 Astra high（Codex + Cockpi
 
 **唯一源**：`$HOME\.gemini\config\skills\cowork`（下称 `ROOT`）。Codex 端的 `~\.codex\skills\cowork` 是指向此处的 Junction。
 **运行时状态**：`$HOME\.cowork\`。其中 `state.json` 记录额度状态、基线与扫描时间，`usage.jsonl` 记录调用账本。
-**当前主力阵容（固定 3 模型，默认全开 `high` 档）**：
-- **GPT-6 Astra (`high`)**：Codex 通道，代码严谨性 / 后端 / 数学 / 生图 / Office 插件最强；速度最慢；**单账号额度较少，由 Cockpit 自动切换账号**。
-- **Gemini 4 Carbon (`high`)**：Antigravity (`agy`) 通道，文笔 / 世界知识 / 1M 超长上下文最强，Agentic 工程强；三家中最快、额度最充裕。
-- **Claude Opus 5.5 (`high`)**：Antigravity (`agy`) 通道，审美（尤其前端 UI）与架构品味最强；额度最稀缺，必须惜用。
+**当前主力阵容与资源排序（由 `scripts/sync-docs.ps1` 自动同步）**：
+<!-- AUTO:ROSTER:START -->
+> 自动同步自 `registry/models.json` (`registry_rev: 3`, 活跃模型: 3)
+
+| 模型 | ID / 通道 | 默认档位 | 顶级长板（>=9） | 额度 (`quota_rank`) | 速度 (`speed_rank`) | 运行特性 |
+|---|---|---|---|---|---|---|
+| **GPT-6 Astra** | `gpt-6-astra` (`codex`) | `high` | backend (10), code_rigor (10), image_gen (10), math (10), agentic_coding (9.5), office_docs (9), world_knowledge (9) | 2 (中等) | 1 (较慢) | Cockpit 自动切号自愈; tools: `image_gen`, `office_plugins`, `latex`, `browser`, `computer_use` |
+| **Claude Opus 5.5** | `claude-opus-5-5` (`agy`) | `high` | frontend_aesthetic (10), agentic_coding (9.5) | 1 (稀缺) | 2 (居中) | tools: `web_search`, `browser` |
+| **Gemini 4 Carbon** | `gemini-4-carbon` (`agy`) | `high` | long_context (10), prose (10), world_knowledge (10), agentic_coding (9) | 3 (充裕) | 3 (最快) | tools: `web_search`, `browser`, `long_context_1m` |
+
+- **可用额度排序（低 → 高）**: Claude Opus 5.5 (`claude-opus-5-5`) < GPT-6 Astra (`gpt-6-astra`) < Gemini 4 Carbon (`gemini-4-carbon`)
+- **响应速度排序（快 → 慢）**: Gemini 4 Carbon (`gemini-4-carbon`) > Claude Opus 5.5 (`claude-opus-5-5`) > GPT-6 Astra (`gpt-6-astra`)
+<!-- AUTO:ROSTER:END -->
 
 | 想做什么 | 看哪里 |
 |---|---|
@@ -45,7 +54,8 @@ description: 【多模型协同总调度】在 GPT-6 Astra high（Codex + Cockpi
    - **跨账号 `-Resume <sid>` 失效处理（`resume_invalidated=true`）**：
      - 旧账号会话中的加密推理状态（`encrypted_content`）在切到新账号后可能无法续跑。一旦返回 JSON 中 `resume_invalidated=true`（或切号后 `-Resume` 报错），**严禁继续对旧 `<sid>` 重试**！必须立即**去掉 `-Resume` 开启新会话**，将 `<scratch>` 目录中已保存的共识方案、分块上下文或增量材料内联进提示词续接。
 2. **PATH 上的 `codex.exe` 为 0.145 旧版**：必须使用桌面版自带的新版 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`（`invoke-model.ps1` 自动解析）。
-3. **非交互 `codex exec` 中 GPT 的 shell 工具（code-mode host）会卡死**：向 GPT-6 Astra 派工时必须绕开 shell 工具调用：
+3. **非交互 `codex exec` 中 GPT 的 shell 工具（code-mode host）限制与自进化探测**：
+   - 若 `$HOME\.cowork\state.json` 中 `codex_shell_probe.shell_works == true` 且版本匹配当前 `codex.exe`，说明新版 Codex CLI 已修复非交互 shell 卡死问题，可直接按需放行；否则向 GPT-6 Astra 派工时必须绕开 shell 工具调用：
    - 审查类任务：将待审材料直接内联进提示词，明确声明“不要调用任何工具”；
    - 实现类任务：要求按 `=====FILE: <相对路径>=====` … `=====END FILE=====` 纯文本输出完整文件，由主控执行 `scripts/extract-files.ps1 -InputFile <回答> -Root <项目> -AllowedPrefixes <允许写的前缀>` 落盘并实跑测试；
    - agy（Gemini 4 Carbon / Opus 5.5）的文件与终端工具正常，可直接使用 `-Access write`。
@@ -83,18 +93,20 @@ detect-models.ps1          # 24 小时内已扫描过会直接返回 {"skipped":
 - 数学与后端的正确性主写与把关优先走 `best-rigor`（`gpt-6-astra` `high`），由异构厂商模型（`gemini-4-carbon` `high`）复核接口、上下文一致性与实跑验证。
 - 最终文字润色交给 `best-prose`（`gemini-4-carbon` `high`），剔除一切防御性写作表述。
 
-**常见任务速查**（以 route 输出为准）：
+**标准别名与常见任务速查**（由 `scripts/sync-docs.ps1` 自动从 `models.json` 与 `route.ps1` 渲染）：
+<!-- AUTO:ROUTING:START -->
+- **标准能力别名**: `best-aesthetic` -> `claude-opus-5-5`, `best-image` -> `gpt-6-astra`, `best-knowledge` -> `gemini-4-carbon`, `best-math` -> `gpt-6-astra`, `best-prose` -> `gemini-4-carbon`, `best-rigor` -> `gpt-6-astra`
 
-| 任务 | 起草（全部 `high`） | 审查 / 把关 / 润色 |
-|---|---|---|
-| 前端页面 / 落地页 | Gemini 4 Carbon | Opus 5.5 审美把关 |
-| 后端 / API / 并发 | GPT-6 Astra（后台） | Gemini 4 Carbon 检查接口与全仓一致性并实跑测试 |
-| 数学推导 / 算法 | GPT-6 Astra（后台） | Gemini 4 Carbon 复核关键步骤并写脚本验算 |
-| 论文 / 长文 / 文案 | Gemini 4 Carbon | GPT-6 Astra 只读核查事实与引用（Truth Gate） |
-| 配图 / 插画 / Mockup | GPT-6 Astra `image_gen` | Opus 5.5 审阅一次构图与配色 |
-| PPT / Word / Excel | GPT-6 Astra（Codex 插件） | Opus 5.5 审阅版式，Gemini 4 Carbon 润色文字 |
-| 检索 / 综述 / 世界知识 | Gemini 4 Carbon | GPT-6 Astra 抽查引用与数据（Carbon 幻觉率 11%，必走 Truth Gate） |
-| 大仓库理解 / 重构 | Gemini 4 Carbon（1M 上下文） | GPT-6 Astra 审查正确性；按需由 Opus 5.5 审阅架构品味 |
+| 典型场景 | 标签 (`-Tags`) | 主执行 (`primary`) | 审查 (`reviewer`) | 润色 (`polisher`) | 协作模式 (`pattern`) |
+|---|---|---|---|---|---|
+| 前端页面 / 落地页 | `frontend,landing_page` | `gemini-4-carbon` | `claude-opus-5-5` | - | `aesthetic_gate` |
+| 后端 / API / 并发 | `backend,concurrency` | `gpt-6-astra` | `gemini-4-carbon` | - | `pipelined_review` |
+| 数学推导 / 算法 | `math,algorithm` | `gpt-6-astra` | `gemini-4-carbon` | - | `pipelined_review` |
+| 论文 / 长文 / 文案 | `prose,paper` | `gemini-4-carbon` | `gpt-6-astra` | - | `pipelined_review` |
+| 配图 / 插画 / Mockup | `image_gen` | `gpt-6-astra` | `claude-opus-5-5` | - | `strength_delegation` |
+| PPT / Word / Excel | `office,ppt` | `gpt-6-astra` | `claude-opus-5-5` | - | `strength_delegation` |
+| 检索 / 综述 / 大仓库理解 | `research,long_context` | `gemini-4-carbon` | `gpt-6-astra` | - | `pipelined_review` |
+<!-- AUTO:ROUTING:END -->
 
 ---
 
@@ -124,7 +136,7 @@ detect-models.ps1          # 24 小时内已扫描过会直接返回 {"skipped":
 invoke-model.ps1 -Model <id|别名> -Access read|write -PromptFile <f> -WorkDir <d> [-Resume <sid>] [-OutFile <f>] [-Tags …] [-Effort …] [-JsonSchema <f>] [-DryRun]
 ```
 
-- 别名：`best-rigor`、`best-math`、`best-image`（均指向 `gpt-6-astra`）；`best-prose`、`best-knowledge`（均指向 `gemini-4-carbon`）；`best-aesthetic`（指向 `claude-opus-5-5`）。
+- 别名：支持 `models.json` 中的全部模型 ID 与 `best-*` 能力别名（见第 2 步自动同步表）。
 - 输出末行为汇总 JSON，包含 `session_id`、`attempts`、`account_switched`、`resume_invalidated`、`quota_error`。
 - **验收后必做**：执行 `record-outcome.ps1 -SessionId <sid> -Outcome ok|redo|fail`。
 
@@ -165,3 +177,13 @@ invoke-model.ps1 -Model <id|别名> -Access read|write -PromptFile <f> -WorkDir 
 - 真伪复查结论；
 - 额度与账号池概况（各模型调用次数；如期间触发 Cockpit 自动切号重试，简要说明）；
 - 新模型检测结果或档案变更（如有待确认提案，列出提案文件路径）。
+
+---
+
+## 第 7 步：自我维护与自我升级（doctor / calibrate / maintain）
+
+- **一键自检与修复**：`doctor.ps1 [-Repair] [-ProbeCodexShell] [-NoNetwork]`（检查双端 Junction、文档漂移、过期租约、调用 `outcome` 回填率及新版 Codex 非交互 shell 自愈探测）。
+- **遥测自校准提案**：`calibrate-telemetry.ps1 [-WindowDays 30] [-DryRun]`（聚合近 30 天真实返工率、实测耗时反转与切号健康度，生成待批提案至 `registry/proposals/`，绝不直接改线上分数）。
+- **去剧透实测与手动盲评**：`probe-model.ps1 -ModelId <id> [-Grade] [-EmitProposals]`（仅在手动指定时运行；发给被测模型前自动剥离 `Scoring by ...` 评分细则防剧透，`-Grade` 时强制选异构厂商评委匿名盲评并本地核算封顶）。
+- **受管文档防漂移同步**：`sync-docs.ps1 [-Check]`（将 `models.json` 与 `route.ps1` 自动同步至 `SKILL.md`、`references/model-profiles.md`、`README.md`）。
+- **全链路编排门禁**：`maintain.ps1 [-SkipResearch] [-ForceDetect] [-RunProbe] [-CompactUsage] [-NoGitCommit] [-Push] [-DryRun]`（默认仅联网调研与异构核验，不自动跑耗额度的实测题；任何受管变更必过 `selftest.ps1` 门禁，失败自动原子回滚；门禁全绿后归档冷账本并在本地安全 `git commit`，仅显式传 `-Push` 才推送远端）。

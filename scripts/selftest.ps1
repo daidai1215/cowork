@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
 Validate registry inputs and aggregate independent offline test suites.
 .DESCRIPTION
@@ -221,6 +221,10 @@ try {
             path = Join-Path $paths.Root 'registry\research.schema.json'
         },
         @{
+            name = 'probe-grade.schema.json parses'
+            path = Join-Path $paths.Root 'registry\probe-grade.schema.json'
+        },
+        @{
             name = 'research-sample.json parses'
             path = Join-Path $paths.Root 'evals\fixtures\research-sample.json'
         }
@@ -235,6 +239,29 @@ try {
         }
         catch {
             Add-SelftestStaticCheck $inputFile.name $false $_.Exception.Message
+        }
+    }
+
+    $canonicalRegistry = [IO.Path]::GetFullPath((Join-Path $paths.Root 'registry\models.json'))
+    if ([IO.Path]::GetFullPath($paths.Registry) -ieq $canonicalRegistry) {
+        $syncScript = Join-Path $paths.Root 'scripts\sync-docs.ps1'
+        try {
+            $syncCheck = Invoke-OrchestraProcess -FilePath 'powershell.exe' `
+                -Arguments @(
+                    '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                    '-File', $syncScript, '-Check',
+                    '-RegistryPath', $paths.Registry,
+                    '-Root', $paths.Root
+                ) -WorkDir $paths.Root -TimeoutSec 60 -CaptureStdout
+            $syncOk = ($syncCheck.exit_code -eq 0 -and -not $syncCheck.timeout)
+            $syncDetail = ''
+            if (-not $syncOk) {
+                $syncDetail = ($syncCheck.stdout + $syncCheck.stderr) -join ' '
+            }
+            Add-SelftestStaticCheck 'managed docs match models.json (sync-docs -Check)' $syncOk $syncDetail
+        }
+        catch {
+            Add-SelftestStaticCheck 'managed docs match models.json (sync-docs -Check)' $false $_.Exception.Message
         }
     }
 

@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
 Applies bounded research updates and manages review proposals.
 .DESCRIPTION
@@ -521,18 +521,54 @@ function Get-ResearchPlan {
         }
 
         $channel = [string](Get-V $Research 'channel')
+        $configuredEffort = [string](Get-V $policy 'default_effort' 'high')
+        if ([string]::IsNullOrWhiteSpace($configuredEffort)) { $configuredEffort = 'high' }
         $modelFlag = $id
-        $defaultEffort = 'xhigh'
+        $defaultEffort = $configuredEffort
         $efforts = @('low', 'medium', 'high', 'xhigh')
         $tools = @()
         if ($channel -eq 'agy') {
             $modelFlag = $id + '-{effort}'
-            $defaultEffort = 'high'
             $efforts = @(Get-AgyEfforts $State $id)
             if ($efforts -notcontains $defaultEffort) {
                 $defaultEffort = $efforts[$efforts.Count - 1]
             }
             $tools = @('web_search', 'browser')
+        }
+        elseif ($efforts -notcontains $defaultEffort) {
+            $defaultEffort = 'high'
+        }
+
+        $invokeObject = [pscustomobject]@{
+            model_flag = $modelFlag
+            default_effort = $defaultEffort
+            efforts = $efforts
+        }
+        if ($channel -eq 'codex') {
+            $rotationDonor = @(
+                Get-A $Registry 'models' |
+                    Where-Object {
+                        (Get-V $_ 'status') -eq 'active' -and
+                        (Get-V $_ 'channel') -eq 'codex' -and
+                        [bool](Get-V (Get-V $_ 'invoke') 'account_rotation' $false)
+                    } |
+                    Sort-Object -Property @{
+                        Expression = { if ((Get-V $_ 'family') -eq (Get-V $Research 'family')) { 0 } else { 1 } }
+                    }, @{
+                        Expression = { Get-Generation $_ }
+                        Descending = $true
+                    }, id
+            ) | Select-Object -First 1
+            if ($null -ne $rotationDonor) {
+                $donorInvoke = Get-V $rotationDonor 'invoke'
+                Set-V $invokeObject 'account_rotation' $true
+                foreach ($rotProp in @('rotation_max_retries', 'rotation_wait_sec', 'exhausted_minutes')) {
+                    $rotVal = Get-V $donorInvoke $rotProp
+                    if ($null -ne $rotVal) {
+                        Set-V $invokeObject $rotProp $rotVal
+                    }
+                }
+            }
         }
 
         $caps = [pscustomobject]@{}
@@ -557,11 +593,7 @@ function Get-ResearchPlan {
             tier = Get-V $Research 'tier'
             status = 'candidate'
             channel = $channel
-            invoke = [pscustomobject]@{
-                model_flag = $modelFlag
-                default_effort = $defaultEffort
-                efforts = $efforts
-            }
+            invoke = $invokeObject
             tools = $tools
             quota_rank = Get-V $Research 'quota_rank_hint'
             speed_rank = Get-V $Research 'speed_rank_hint'
@@ -930,7 +962,7 @@ function Assert-PatchValue {
                     }
                 }
                 'source' {
-                    if ($Value -isnot [string] -or $Value -cnotin @('public', 'inherited', 'user')) {
+                    if ($Value -isnot [string] -or $Value -cnotin @('public', 'inherited', 'user', 'probe', 'telemetry')) {
                         Fail-Args 'Invalid cap source.'
                     }
                 }
@@ -940,6 +972,17 @@ function Assert-PatchValue {
                         items = [pscustomobject]@{ '$ref' = '#/definitions/evidence' }
                     }
                     Assert-Schema $Value $evidenceSchema $script:ResearchSchema '$.patch.evidence'
+                    foreach ($evItem in @($Value)) {
+                        $evUrl = [string](Get-V $evItem 'url' '')
+                        if ($evUrl -ceq 'user') { continue }
+                        $parsedUri = $null
+                        if (
+                            -not [uri]::TryCreate($evUrl, [UriKind]::Absolute, [ref]$parsedUri) -or
+                            $parsedUri.Scheme -notin @('http', 'https', 'probe', 'telemetry')
+                        ) {
+                            Fail-Args ('Invalid evidence URI scheme at $.patch.evidence: ' + $evUrl)
+                        }
+                    }
                 }
             }
         }
@@ -1245,6 +1288,17 @@ function Invoke-Research {
     $commit = Save-WithBackup $Paths $plan.registry ('Research: ' + $id)
     $proposalPaths = New-Object 'System.Collections.Generic.List[string]'
     foreach ($proposal in $plan.proposals) {
+        $patchPaths = @(foreach ($op in @(Get-A $proposal 'patch')) {
+            if ((Get-V $op 'op') -eq 'add_hard_rule') {
+                'hard_rules/' + [string](Get-V (Get-V $op 'value') 'id')
+            }
+            else {
+                [string](Get-V $op 'path')
+            }
+        })
+        if (Test-PendingProposalConflict -Paths $Paths -ModelId ([string]$proposal.model_id) -PatchPaths $patchPaths) {
+            continue
+        }
         Set-V $proposal 'base_rev' $commit.rev
         [void]$proposalPaths.Add((Save-Proposal $Paths $proposal))
     }

@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param([string]$RegistryPath, [string]$StateDir)
 
 . (Join-Path $PSScriptRoot '..\scripts\lib\common.ps1')

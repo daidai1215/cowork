@@ -1,10 +1,11 @@
-﻿<#
+<#
 .SYNOPSIS
-Run isolated, offline route regression tests for the three active models.
+Run isolated, model-ID-agnostic route regression tests.
 .DESCRIPTION
-Copies the supplied registry into a unique temporary directory.
-Uses explicit synthetic escalation and candidate fixtures.
-Writes one suite JSON object and exits 1 on assertion failure.
+Part A validates live registry structural invariants and dynamic alias/tag routing
+without hardcoding any current production model IDs.
+Part B validates escalation, candidate restrictions, fallback rules, and the 1.5-point
+vendor diversity threshold on a deterministic synthetic 3-model fixture.
 #>
 [CmdletBinding()]
 param([string]$RegistryPath, [string]$StateDir)
@@ -73,7 +74,7 @@ function Copy-RTestFixture {
 
 function Get-RTestModel {
     param($Registry, [string]$Id)
-    $models = @($Registry.models | Where-Object { $_.id -eq $Id })
+    $models = @($Registry.models | Where-Object { [string]$_.id -eq $Id })
     if ($models.Count -ne 1) { throw "Expected exactly one model: $Id" }
     return $models[0]
 }
@@ -84,18 +85,6 @@ function Set-RTestScore {
     if ($null -eq $cap) { throw "Missing capability: $Dimension" }
     Set-OrchestraProperty $cap 'score' $Score
     Set-OrchestraProperty $cap 'approved_score' $Score
-}
-
-function Add-RTestCandidate {
-    param($Registry)
-    $candidate = Copy-RTestFixture (Get-RTestModel $Registry 'gemini-4-carbon')
-    Set-OrchestraProperty $candidate 'id' 'test-candidate'
-    Set-OrchestraProperty $candidate 'display_name' 'Test Candidate'
-    Set-OrchestraProperty $candidate 'status' 'candidate'
-    Set-OrchestraProperty $candidate 'escalation_only' $false
-    Set-RTestScore $candidate 'prose' 8.5
-    Set-RTestScore $candidate 'world_knowledge' 10
-    Set-OrchestraProperty $Registry 'models' (@($Registry.models) + @($candidate))
 }
 
 function Set-RTestExhaustion {
@@ -121,6 +110,161 @@ function Set-RTestExhaustion {
     } | Out-Null
 }
 
+function New-SyntheticCapMap {
+    param([string[]]$Dimensions, [hashtable]$Scores)
+    $caps = [ordered]@{}
+    foreach ($dim in $Dimensions) {
+        $val = if ($Scores.ContainsKey($dim)) { [double]$Scores[$dim] } else { 7.0 }
+        $caps[$dim] = [ordered]@{
+            score = $val
+            approved_score = $val
+            source = 'public'
+            locked = $false
+            confidence = 0.8
+        }
+    }
+    return ([pscustomobject]$caps)
+}
+
+function New-SyntheticFixture {
+    param($TemplateRegistry)
+    $dims = @($TemplateRegistry.cap_dimensions | ForEach-Object { [string]$_ })
+    $syn = Copy-RTestFixture $TemplateRegistry
+    $models = @(
+        [pscustomobject]@{
+            id = 'syn-rigor'
+            display_name = 'Synthetic Rigor'
+            vendor = 'openai'
+            family = 'openai-syn'
+            generation = '1'
+            tier = 'flagship'
+            status = 'active'
+            channel = 'codex'
+            invoke = [pscustomobject]@{
+                model_flag = 'syn-rigor'
+                default_effort = 'high'
+                efforts = @('low', 'medium', 'high')
+                account_rotation = $true
+                rotation_max_retries = 2
+                rotation_wait_sec = 10
+                exhausted_minutes = 30
+            }
+            tools = @('image_gen', 'office_plugins', 'latex', 'browser')
+            quota_rank = 2
+            speed_rank = 1
+            ranks_locked = $true
+            escalation_only = $false
+            escalate_to = $null
+            fallback = @('syn-prose', 'syn-aesthetic')
+            caps = (New-SyntheticCapMap -Dimensions $dims -Scores @{
+                code_rigor = 10; backend = 10; math = 10; image_gen = 10
+                frontend_aesthetic = 7; prose = 6; world_knowledge = 8
+                long_context = 8; agentic_coding = 9.5; office_docs = 9
+            })
+        },
+        [pscustomobject]@{
+            id = 'syn-aesthetic'
+            display_name = 'Synthetic Aesthetic'
+            vendor = 'anthropic'
+            family = 'anthropic-syn'
+            generation = '1'
+            tier = 'flagship'
+            status = 'active'
+            channel = 'agy'
+            invoke = [pscustomobject]@{
+                model_flag = 'syn-aesthetic-{effort}'
+                default_effort = 'high'
+                efforts = @('low', 'medium', 'high')
+            }
+            tools = @('web_search', 'browser')
+            quota_rank = 1
+            speed_rank = 2
+            ranks_locked = $true
+            escalation_only = $false
+            escalate_to = $null
+            fallback = @('syn-prose')
+            caps = (New-SyntheticCapMap -Dimensions $dims -Scores @{
+                code_rigor = 8.5; backend = 8; math = 8; image_gen = 0
+                frontend_aesthetic = 10; prose = 8.5; world_knowledge = 7
+                long_context = 8; agentic_coding = 9.5; office_docs = 5
+            })
+        },
+        [pscustomobject]@{
+            id = 'syn-prose'
+            display_name = 'Synthetic Prose'
+            vendor = 'google'
+            family = 'google-syn'
+            generation = '1'
+            tier = 'flagship'
+            status = 'active'
+            channel = 'agy'
+            invoke = [pscustomobject]@{
+                model_flag = 'syn-prose-{effort}'
+                default_effort = 'high'
+                efforts = @('low', 'medium', 'high')
+            }
+            tools = @('web_search', 'browser', 'long_context_1m')
+            quota_rank = 3
+            speed_rank = 3
+            ranks_locked = $true
+            escalation_only = $false
+            escalate_to = $null
+            fallback = @('syn-rigor')
+            caps = (New-SyntheticCapMap -Dimensions $dims -Scores @{
+                code_rigor = 8.5; backend = 8.5; math = 8.5; image_gen = 0
+                frontend_aesthetic = 8.5; prose = 9.5; world_knowledge = 9.5
+                long_context = 9.5; agentic_coding = 9; office_docs = 7
+            })
+        }
+    )
+    Set-OrchestraProperty $syn 'models' $models
+    Set-OrchestraProperty $syn 'aliases' ([pscustomobject]@{
+        'best-rigor' = 'syn-rigor'
+        'best-math' = 'syn-rigor'
+        'best-image' = 'syn-rigor'
+        'best-prose' = 'syn-prose'
+        'best-knowledge' = 'syn-prose'
+        'best-aesthetic' = 'syn-aesthetic'
+    })
+    Set-OrchestraProperty $syn 'hard_rules' @(
+        [pscustomobject]@{
+            id = 'image-gen-tool-only'
+            when_tags_any = @('image_gen')
+            primary_requires_tool = 'image_gen'
+            locked = $true
+        },
+        [pscustomobject]@{
+            id = 'frontend-aesthetic-gate'
+            when_tags_any = @('frontend', 'ui', 'landing_page')
+            pattern = 'aesthetic_gate'
+            reviewer = 'best-aesthetic'
+            reviewer_fallback = 'syn-prose'
+            exclude_reviewer_from_primary = $true
+            locked = $true
+        },
+        [pscustomobject]@{
+            id = 'prose-polish-when-rigor-primary'
+            when_primary_vendor = 'openai'
+            when_tags_any = @('prose', 'essay', 'paper', 'copywriting', 'office', 'ppt')
+            polisher = 'best-prose'
+            locked = $false
+        }
+    )
+    return (Copy-RTestFixture $syn)
+}
+
+function Add-SynCandidate {
+    param($Registry)
+    $candidate = Copy-RTestFixture (Get-RTestModel $Registry 'syn-prose')
+    Set-OrchestraProperty $candidate 'id' 'syn-candidate'
+    Set-OrchestraProperty $candidate 'display_name' 'Synthetic Candidate'
+    Set-OrchestraProperty $candidate 'status' 'candidate'
+    Set-OrchestraProperty $candidate 'escalation_only' $false
+    Set-RTestScore $candidate 'prose' 8.5
+    Set-RTestScore $candidate 'world_knowledge' 10
+    Set-OrchestraProperty $Registry 'models' (@($Registry.models) + @($candidate))
+}
+
 try {
     $env:MODEL_ORCHESTRA_NOW = '2026-11-10T12:00:00Z'
     $sourcePaths = Get-OrchestraPaths -RegistryPath $RegistryPath -StateDir $null
@@ -138,82 +282,111 @@ try {
         -StateDir (Join-Path $temp 'state')
     [void][IO.Directory]::CreateDirectory($script:routePaths.RegistryDir)
 
+    # =========================================================================
+    # Part A: Live Registry Dynamic Invariants (Zero Hardcoded Model IDs)
+    # =========================================================================
     $fixture = Read-JsonFile -Path $sourcePaths.Registry
     if ($null -eq $fixture) { throw 'Registry template was not found.' }
-    $expectedIds = @('gpt-6-astra', 'gemini-4-carbon', 'claude-opus-5-5')
-    $actualIds = @($fixture.models | ForEach-Object { [string]$_.id })
-    Assert-RTest (
-        $actualIds.Count -eq 3 -and
-        @($actualIds | Where-Object { $_ -notin $expectedIds }).Count -eq 0
-    ) 'registry contains exactly the three primary models'
-    foreach ($id in $expectedIds) {
-        $profile = Get-RTestModel $fixture $id
+    $policyObj = Get-OrchestraProperty $fixture 'policy'
+    $expectedEffort = [string](Get-OrchestraProperty $policyObj 'default_effort' 'high')
+
+    $activeModels = @($fixture.models | Where-Object { [string]$_.status -eq 'active' })
+    Assert-RTest ($activeModels.Count -ge 2) 'live registry has at least two active models'
+
+    foreach ($profile in $activeModels) {
+        $profId = [string]$profile.id
         Assert-RTest (
-            $profile.status -eq 'active' -and
-            $profile.invoke.default_effort -eq 'high' -and
+            [string]$profile.invoke.default_effort -eq $expectedEffort -and
             -not [bool](Get-OrchestraProperty $profile 'escalation_only' $false)
-        ) "$id is active at high effort without escalation"
+        ) "active model $profId defaults to $expectedEffort effort without escalation_only"
+
+        if ([string]$profile.channel -eq 'codex' -and [bool](Get-OrchestraProperty $profile.invoke 'account_rotation' $false)) {
+            Assert-RTest (
+                [int](Get-OrchestraProperty $profile.invoke 'rotation_max_retries' -1) -ge 1 -and
+                [double](Get-OrchestraProperty $profile.invoke 'rotation_wait_sec' -1) -ge 1 -and
+                [double](Get-OrchestraProperty $profile.invoke 'exhausted_minutes' -1) -gt 0
+            ) "codex model $profId declares valid Cockpit rotation policy"
+        }
     }
-    $astra = Get-RTestModel $fixture 'gpt-6-astra'
+
+    $bestRigor = Resolve-ModelId -Registry $fixture -Name 'best-rigor'
+    $bestProse = Resolve-ModelId -Registry $fixture -Name 'best-prose'
+    $bestAesthetic = Resolve-ModelId -Registry $fixture -Name 'best-aesthetic'
+    $bestImage = Resolve-ModelId -Registry $fixture -Name 'best-image'
     Assert-RTest (
-        (Get-OrchestraProperty $astra.invoke 'account_rotation' $false) -eq $true -and
-        (Get-OrchestraProperty $astra.invoke 'rotation_max_retries' -1) -eq 2 -and
-        (Get-OrchestraProperty $astra.invoke 'rotation_wait_sec' -1) -eq 10 -and
-        (Get-OrchestraProperty $astra.invoke 'exhausted_minutes' -1) -eq 30
-    ) 'Astra declares the Cockpit rotation policy'
+        -not [string]::IsNullOrWhiteSpace($bestRigor) -and
+        -not [string]::IsNullOrWhiteSpace($bestProse) -and
+        -not [string]::IsNullOrWhiteSpace($bestAesthetic) -and
+        -not [string]::IsNullOrWhiteSpace($bestImage)
+    ) 'core capability aliases resolve dynamically'
 
     Save-RTestFixture $fixture
     Set-RTestExhaustion
 
     $run = Invoke-RTest 'frontend,landing_page'
     $r = $run.Result
-    Assert-RTest ($run.Exit -eq 0) 'frontend exits 0'
-    Assert-RTest ($r.primary -eq 'gemini-4-carbon') 'frontend primary'
-    Assert-RTest ($r.reviewer -eq 'claude-opus-5-5') 'frontend reviewer'
-    Assert-RTest ($null -eq $r.polisher) 'primary is not duplicated as polisher'
-    Assert-RTest ($r.pattern -eq 'aesthetic_gate') 'frontend aesthetic gate'
+    Assert-RTest ($run.Exit -eq 0) 'live frontend exits 0'
+    Assert-RTest ($r.pattern -eq 'aesthetic_gate') 'live frontend uses aesthetic_gate'
+    Assert-RTest ($r.reviewer -eq $bestAesthetic) 'live frontend reviewer matches best-aesthetic'
+    if ($activeModels.Count -ge 2) {
+        Assert-RTest ($r.primary -ne $bestAesthetic) 'live frontend excludes aesthetic reviewer from primary'
+    }
+    Assert-RTest (
+        ($r.primary -eq $bestProse -and $null -eq $r.polisher) -or
+        ($r.polisher -eq $bestProse -or $null -eq $r.polisher)
+    ) 'live frontend polisher is valid without duplicating primary'
 
     $run = Invoke-RTest 'image_gen'
+    $imgPrimaryModel = Get-RTestModel $fixture ([string]$run.Result.primary)
     Assert-RTest (
-        $run.Exit -eq 0 -and $run.Result.primary -eq 'gpt-6-astra'
-    ) 'image generation primary'
-    Assert-RTest (
-        $run.Result.reviewer -eq 'claude-opus-5-5' -and
-        $run.Result.pattern -eq 'strength_delegation'
-    ) 'image generation reviewer and pattern'
+        $run.Exit -eq 0 -and (@(Get-OrchestraArray $imgPrimaryModel 'tools') -contains 'image_gen')
+    ) 'live image_gen selects a primary with image_gen tool'
+    if ([string]$imgPrimaryModel.vendor -eq 'openai') {
+        Assert-RTest ($run.Result.pattern -eq 'strength_delegation') 'live image_gen uses strength_delegation for openai primary'
+    }
 
     $run = Invoke-RTest 'backend,concurrency'
+    $backendPrimary = Get-RTestModel $fixture ([string]$run.Result.primary)
     Assert-RTest (
-        $run.Exit -eq 0 -and $run.Result.primary -eq 'gpt-6-astra' -and
-        $run.Result.reviewer -eq 'gemini-4-carbon'
-    ) 'backend primary and independent reviewer'
+        $run.Exit -eq 0 -and
+        [double]$backendPrimary.caps.backend.score -ge 9 -and
+        [double]$backendPrimary.caps.code_rigor.score -ge 9 -and
+        $run.Result.reviewer -ne $run.Result.primary -and
+        $run.Result.self_review -eq $false
+    ) 'live backend selects min_cap >= 9 primary and independent reviewer'
 
     foreach ($modeName in @('balanced', 'economy')) {
         $run = Invoke-RTest 'math' -ModeName $modeName
+        $mathPrimary = Get-RTestModel $fixture ([string]$run.Result.primary)
         Assert-RTest (
-            $run.Exit -eq 0 -and $run.Result.primary -eq 'gpt-6-astra' -and
-            $run.Result.reviewer -eq 'gemini-4-carbon'
-        ) "math primary and reviewer in $modeName"
+            $run.Exit -eq 0 -and
+            [double]$mathPrimary.caps.math.score -ge 9 -and
+            $run.Result.reviewer -ne $run.Result.primary -and
+            $run.Result.self_review -eq $false
+        ) "live math primary and independent reviewer in $modeName"
         Assert-RTest (
             ($run.Result.reasons -join ' ') -match 'math >= 9'
-        ) "math min_cap reason in $modeName"
+        ) "live math min_cap reason in $modeName"
     }
+
     foreach ($tagText in @('prose,essay', 'prose', 'refactor')) {
         $run = Invoke-RTest $tagText
         Assert-RTest (
-            $run.Exit -eq 0 -and $run.Result.primary -eq 'gemini-4-carbon' -and
-            $run.Result.reviewer -eq 'gpt-6-astra' -and
+            $run.Exit -eq 0 -and
+            -not [string]::IsNullOrWhiteSpace([string]$run.Result.primary) -and
+            $run.Result.reviewer -ne $run.Result.primary -and
             $run.Result.self_review -eq $false
-        ) "$tagText primary and reviewer"
+        ) "live $tagText selects distinct primary and reviewer"
     }
 
-    Set-RTestExhaustion @('claude-opus-5-5')
+    Set-RTestExhaustion @($bestAesthetic)
     $run = Invoke-RTest 'frontend'
     Assert-RTest (
-        $run.Exit -eq 0 -and $run.Result.primary -eq 'gemini-4-carbon' -and
-        $run.Result.reviewer -eq 'gemini-4-carbon' -and
-        $run.Result.self_review -eq $true -and $run.Result.blocked -eq $false
-    ) 'aesthetic fallback may self-review'
+        $run.Exit -eq 0 -and
+        $run.Result.blocked -eq $false -and
+        -not [string]::IsNullOrWhiteSpace([string]$run.Result.reviewer) -and
+        $run.Result.self_review -eq ($run.Result.primary -eq $run.Result.reviewer)
+    ) 'live aesthetic fallback unblocks cleanly when best-aesthetic is exhausted'
 
     Set-RTestExhaustion
     $run = Invoke-RTest 'not_a_registered_tag'
@@ -229,134 +402,139 @@ try {
     ) 'all exhausted returns blocked with exit 0'
 
     Set-RTestExhaustion
-    $run = Invoke-RTest 'image_gen' -Excluded 'gpt-6-astra'
-    Assert-RTest (
-        $run.Exit -eq 0 -and $run.Result.blocked -eq $true
-    ) 'tool requirement blocks when eligible tool provider is excluded'
+    $imageProviders = @(
+        $fixture.models |
+            Where-Object { @(Get-OrchestraArray $_ 'tools') -contains 'image_gen' } |
+            ForEach-Object { [string]$_.id }
+    )
+    if ($imageProviders.Count -gt 0) {
+        $run = Invoke-RTest 'image_gen' -Excluded ($imageProviders -join ',')
+        Assert-RTest (
+            $run.Exit -eq 0 -and $run.Result.blocked -eq $true
+        ) 'tool requirement blocks when all eligible tool providers are excluded'
+    }
+
     $stateBefore = Get-Content -LiteralPath $script:routePaths.State -Raw -Encoding UTF8
     $run = Invoke-RTest 'research'
     $stateAfter = Get-Content -LiteralPath $script:routePaths.State -Raw -Encoding UTF8
     Assert-RTest ($stateBefore -ceq $stateAfter) 'routing does not mutate state'
 
+    # =========================================================================
+    # Part B: Deterministic Synthetic 3-Model Fixture (Algorithmic Edge Cases)
+    # =========================================================================
+    $synBase = New-SyntheticFixture -TemplateRegistry $fixture
     try {
-        # Production Astra is active. A separate fixture exercises escalation.
-        $caseRegistry = Copy-RTestFixture $fixture
-        $escalationModel = Copy-RTestFixture (Get-RTestModel $caseRegistry 'gpt-6-astra')
-        Set-OrchestraProperty $escalationModel 'id' 'test-escalation'
-        Set-OrchestraProperty $escalationModel 'display_name' 'Test Escalation'
+        # 1. Escalation-only fixture
+        $caseRegistry = Copy-RTestFixture $synBase
+        $escalationModel = Copy-RTestFixture (Get-RTestModel $caseRegistry 'syn-rigor')
+        Set-OrchestraProperty $escalationModel 'id' 'syn-escalation'
+        Set-OrchestraProperty $escalationModel 'display_name' 'Synthetic Escalation'
         Set-OrchestraProperty $escalationModel 'escalation_only' $true
-        Set-OrchestraProperty $caseRegistry 'models' (
-            @($caseRegistry.models) + @($escalationModel)
-        )
+        Set-OrchestraProperty $caseRegistry 'models' (@($caseRegistry.models) + @($escalationModel))
         Save-RTestFixture $caseRegistry
+        Set-RTestExhaustion
+
         foreach ($tag in @('frontend', 'math', 'refactor', 'research')) {
             $run = Invoke-RTest $tag
             Assert-RTest (
                 $run.Exit -eq 0 -and
-                $run.Result.primary -ne 'test-escalation' -and
-                $run.Result.reviewer -ne 'test-escalation' -and
-                $run.Result.polisher -ne 'test-escalation' -and
-                @($run.Result.fallback) -notcontains 'test-escalation'
+                $run.Result.primary -ne 'syn-escalation' -and
+                $run.Result.reviewer -ne 'syn-escalation' -and
+                $run.Result.polisher -ne 'syn-escalation' -and
+                @($run.Result.fallback) -notcontains 'syn-escalation'
             ) "escalation fixture is excluded without permission for $tag"
         }
-        Set-RTestExhaustion @('gpt-6-astra')
+        Set-RTestExhaustion @('syn-rigor')
         $run = Invoke-RTest 'math'
         Assert-RTest (
             $run.Exit -eq 0 -and $run.Result.blocked -eq $true
         ) 'math blocks when only escalation satisfies min_cap'
         $run = Invoke-RTest 'math' -Escalate
         Assert-RTest (
-            $run.Exit -eq 0 -and $run.Result.primary -eq 'test-escalation'
+            $run.Exit -eq 0 -and $run.Result.primary -eq 'syn-escalation'
         ) 'AllowEscalation permits the explicit escalation fixture'
-        $run = Invoke-RTest 'math' -Escalate -Excluded 'test-escalation'
+        $run = Invoke-RTest 'math' -Escalate -Excluded 'syn-escalation'
         Assert-RTest (
             $run.Exit -eq 0 -and $run.Result.blocked -eq $true
         ) 'explicit exclusion still overrides escalation permission'
 
+        # 2. Candidate restrictions & fallback eligibility
         Set-RTestExhaustion
-        Save-RTestFixture $fixture
-
-        # Candidate is the unique strongest knowledge reviewer but has weak prose.
-        $caseRegistry = Copy-RTestFixture $fixture
-        Add-RTestCandidate $caseRegistry
-        Set-RTestScore (Get-RTestModel $caseRegistry 'gpt-6-astra') 'world_knowledge' 8
-        Set-RTestScore (Get-RTestModel $caseRegistry 'claude-opus-5-5') 'world_knowledge' 7
+        $caseRegistry = Copy-RTestFixture $synBase
+        Add-SynCandidate $caseRegistry
         Save-RTestFixture $caseRegistry
         $run = Invoke-RTest 'prose'
         Assert-RTest (
-            $run.Exit -eq 0 -and $run.Result.primary -eq 'gemini-4-carbon' -and
-            $run.Result.reviewer -eq 'gpt-6-astra' -and
-            $run.Result.reviewer -ne 'test-candidate'
+            $run.Exit -eq 0 -and $run.Result.primary -eq 'syn-prose' -and
+            $run.Result.reviewer -eq 'syn-rigor' -and
+            $run.Result.reviewer -ne 'syn-candidate'
         ) 'highest review_caps candidate cannot become reviewer'
         Assert-RTest (
-            @($run.Result.fallback) -contains 'test-candidate'
+            @($run.Result.fallback) -contains 'syn-candidate'
         ) 'candidate remains eligible for primary fallbacks'
-        $candidateScore = Get-OrchestraProperty $run.Result.scores 'test-candidate'
+        $candidateScore = Get-OrchestraProperty $run.Result.scores 'syn-candidate'
         Assert-RTest (
             $null -ne $candidateScore -and
             (Get-OrchestraProperty $candidateScore.penalties 'candidate' 0) -gt 0
         ) 'candidate retains its primary score penalty'
 
-        $caseRegistry = Copy-RTestFixture $fixture
-        Add-RTestCandidate $caseRegistry
-        Set-OrchestraProperty $caseRegistry.aliases 'test-reviewer' 'test-candidate'
+        # 3. Candidate reviewer alias falls back to active reviewer_fallback
+        $caseRegistry = Copy-RTestFixture $synBase
+        Add-SynCandidate $caseRegistry
+        Set-OrchestraProperty $caseRegistry.aliases 'syn-reviewer-alias' 'syn-candidate'
         $rules = Get-OrchestraProperty $caseRegistry 'hard_rules' @()
         Set-OrchestraProperty $caseRegistry 'hard_rules' (@($rules) + @(
             [pscustomobject]@{
                 id = 'test-candidate-reviewer'; when_tags_any = @('prose')
-                reviewer = 'test-reviewer'; reviewer_fallback = 'claude-opus-5-5'
+                reviewer = 'syn-reviewer-alias'; reviewer_fallback = 'syn-aesthetic'
                 locked = $false
             }
         ))
         Save-RTestFixture $caseRegistry
         $run = Invoke-RTest 'prose'
         Assert-RTest (
-            $run.Exit -eq 0 -and $run.Result.primary -eq 'gemini-4-carbon' -and
-            $run.Result.reviewer -eq 'claude-opus-5-5'
+            $run.Exit -eq 0 -and $run.Result.primary -eq 'syn-prose' -and
+            $run.Result.reviewer -eq 'syn-aesthetic'
         ) 'candidate reviewer alias uses its active rule fallback'
 
-        $caseRegistry = Copy-RTestFixture $fixture
-        Add-RTestCandidate $caseRegistry
-        Set-OrchestraProperty $caseRegistry.aliases 'best-aesthetic' 'test-candidate'
+        # 4. Aesthetic candidate alias uses active fallback
+        $caseRegistry = Copy-RTestFixture $synBase
+        Add-SynCandidate $caseRegistry
+        Set-OrchestraProperty $caseRegistry.aliases 'best-aesthetic' 'syn-candidate'
         Save-RTestFixture $caseRegistry
         $run = Invoke-RTest 'frontend,landing_page'
         Assert-RTest (
-            $run.Exit -eq 0 -and $run.Result.primary -eq 'gemini-4-carbon' -and
-            $run.Result.reviewer -eq 'gemini-4-carbon' -and
+            $run.Exit -eq 0 -and $run.Result.primary -eq 'syn-prose' -and
+            $run.Result.reviewer -eq 'syn-prose' -and
             $run.Result.self_review -eq $true -and $run.Result.blocked -eq $false
         ) 'aesthetic candidate alias uses its active fallback'
 
-        $caseRegistry = Copy-RTestFixture $fixture
-        Add-RTestCandidate $caseRegistry
-        Set-OrchestraProperty $caseRegistry.aliases 'best-prose' 'test-candidate'
+        # 5. Candidate polisher alias reselects active polisher
+        $caseRegistry = Copy-RTestFixture $synBase
+        Add-SynCandidate $caseRegistry
+        Set-OrchestraProperty $caseRegistry.aliases 'best-prose' 'syn-candidate'
         Save-RTestFixture $caseRegistry
         $run = Invoke-RTest 'prose'
         Assert-RTest (
-            $run.Exit -eq 0 -and $run.Result.primary -eq 'gemini-4-carbon' -and
-            $run.Result.polisher -eq 'claude-opus-5-5'
+            $run.Exit -eq 0 -and $run.Result.primary -eq 'syn-prose' -and
+            $run.Result.polisher -eq 'syn-aesthetic'
         ) 'candidate polisher alias reselects an active polisher'
 
-        # Keep the diversity threshold measurable after Astra knowledge rose to 9.
-        $caseRegistry = Copy-RTestFixture $fixture
-        Set-RTestScore (Get-RTestModel $caseRegistry 'gpt-6-astra') 'world_knowledge' 8
-        Set-RTestScore (Get-RTestModel $caseRegistry 'claude-opus-5-5') 'world_knowledge' 7
-        $sameVendorModel = Copy-RTestFixture (
-            Get-RTestModel $caseRegistry 'gemini-4-carbon'
-        )
-        Set-OrchestraProperty $sameVendorModel 'id' 'test-same-vendor-reviewer'
-        Set-OrchestraProperty $sameVendorModel 'display_name' 'Test Same Vendor Reviewer'
+        # 6. Vendor diversity 1.5-point inclusive threshold
+        $caseRegistry = Copy-RTestFixture $synBase
+        $sameVendorModel = Copy-RTestFixture (Get-RTestModel $caseRegistry 'syn-prose')
+        Set-OrchestraProperty $sameVendorModel 'id' 'syn-same-vendor-reviewer'
+        Set-OrchestraProperty $sameVendorModel 'display_name' 'Synthetic Same Vendor Reviewer'
         Set-OrchestraProperty $sameVendorModel 'status' 'active'
         Set-OrchestraProperty $sameVendorModel 'escalation_only' $false
         Set-RTestScore $sameVendorModel 'prose' 0
         Set-RTestScore $sameVendorModel 'world_knowledge' 9.5
-        Set-OrchestraProperty $caseRegistry 'models' (
-            @($caseRegistry.models) + @($sameVendorModel)
-        )
+        Set-OrchestraProperty $caseRegistry 'models' (@($caseRegistry.models) + @($sameVendorModel))
         Save-RTestFixture $caseRegistry
         $run = Invoke-RTest 'prose'
         Assert-RTest (
-            $run.Exit -eq 0 -and $run.Result.primary -eq 'gemini-4-carbon' -and
-            $run.Result.reviewer -eq 'gpt-6-astra' -and
+            $run.Exit -eq 0 -and $run.Result.primary -eq 'syn-prose' -and
+            $run.Result.reviewer -eq 'syn-rigor' -and
             ($run.Result.reasons -join ' ') -match 'vendor diversity'
         ) 'different vendor is preferred at the inclusive 1.5 gap'
 
@@ -364,10 +542,11 @@ try {
         Save-RTestFixture $caseRegistry
         $run = Invoke-RTest 'prose'
         Assert-RTest (
-            $run.Exit -eq 0 -and $run.Result.primary -eq 'gemini-4-carbon' -and
-            $run.Result.reviewer -eq 'test-same-vendor-reviewer'
+            $run.Exit -eq 0 -and $run.Result.primary -eq 'syn-prose' -and
+            $run.Result.reviewer -eq 'syn-same-vendor-reviewer'
         ) 'vendor preference does not exceed the 1.5 gap'
 
+        # 7. All-candidate registry allows primary while leaving review roles empty
         foreach ($caseModel in @($caseRegistry.models)) {
             Set-OrchestraProperty $caseModel 'status' 'candidate'
         }

@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
 Runs isolated, offline research-application acceptance tests.
 .DESCRIPTION
@@ -126,7 +126,8 @@ function New-Context {
     $paths = Get-OrchestraPaths -RegistryPath $registryPath -StateDir $stateDirectory
     $sourceRegistry = $script:SourceRegistryPath
     $registry = Clone-Json (Read-JsonFile -Path $sourceRegistry)
-    $geminiFixture = @($registry.models | Where-Object { $_.id -eq 'gemini-4-carbon' })[0]
+    $targetId = Resolve-ModelId -Registry $registry -Name 'best-prose'
+    $geminiFixture = @($registry.models | Where-Object { $_.id -eq $targetId })[0]
     if ($null -ne $geminiFixture) {
         foreach ($capName in @('code_rigor', 'backend', 'math')) {
             $geminiFixture.caps.$capName.score = 7
@@ -138,6 +139,7 @@ function New-Context {
         Directory = $directory
         Paths = $paths
         BaseRev = [long]$registry.registry_rev
+        TargetId = [string]$targetId
     }
 }
 
@@ -153,7 +155,16 @@ function Get-TestModel {
 }
 
 function Read-Sample {
-    return (Read-JsonFile -Path (Join-Path $root 'evals\fixtures\research-sample.json'))
+    $sample = Read-JsonFile -Path (Join-Path $root 'evals\fixtures\research-sample.json')
+    $srcReg = Read-JsonFile -Path $script:SourceRegistryPath
+    $donor = @($srcReg.models | Where-Object { $_.family -eq $sample.family -and $_.status -eq 'active' }) | Select-Object -First 1
+    if ($null -ne $donor) {
+        $genNum = 5
+        if ([int]::TryParse(([string]$donor.generation -replace '\..*$', ''), [ref]$genNum)) {
+            $sample.generation = ([Math]::Max(5, $genNum + 1)).ToString()
+        }
+    }
+    return $sample
 }
 
 function Save-Research {
@@ -180,7 +191,7 @@ function New-Refresh {
     param($Context)
     $research = Read-Sample
     $registry = Read-TestRegistry $Context
-    $model = @($registry.models | Where-Object { $_.id -eq 'gemini-4-carbon' })[0]
+    $model = @($registry.models | Where-Object { $_.id -eq $Context.TargetId })[0]
     $research.model_id = $model.id
     $research.family = $model.family
     $research.generation = $model.generation
@@ -280,7 +291,7 @@ try {
                 Assert-True ($operation.path -ne 'aliases.best-knowledge') 'A zero-margin tie proposed an alias change.'
             }
         }
-        Assert-True ((Read-TestRegistry $context).aliases.'best-knowledge' -eq 'gemini-4-carbon') 'Alias changed automatically.'
+        Assert-True ((Read-TestRegistry $context).aliases.'best-knowledge' -eq $context.TargetId) 'Alias changed automatically.'
     }
 
     Run-Case 'refresh-small-large-and-locked' {
@@ -291,7 +302,7 @@ try {
         $research.caps.prose.score = 8
         $research.caps.long_context.score = 9
         $result = Invoke-Apply $context @('-ResearchFile', (Save-Research $context $research))
-        $model = Get-TestModel $context 'gemini-4-carbon'
+        $model = Get-TestModel $context $context.TargetId
         Assert-True ($model.caps.code_rigor.score -eq 8) 'Delta 1 did not apply.'
         Assert-True ($model.caps.code_rigor.approved_score -eq 7) 'Auto apply moved the approved anchor.'
         Assert-True ($model.caps.math.score -eq 7) 'Delta 3 applied automatically.'
@@ -306,14 +317,14 @@ try {
         $null = Invoke-WithLock -Paths $context.Paths -Name registry -ScriptBlock {
             $proposal = Read-JsonFile -Path $prosePath
             foreach ($operation in @($proposal.patch)) {
-                if ($operation.path -eq 'models[id=gemini-4-carbon].caps.prose.score') {
+                if ($operation.path -eq "models[id=$($context.TargetId)].caps.prose.score") {
                     $operation.unlock = $true
                 }
             }
             Write-JsonAtomic -Path $prosePath -Object $proposal
         }
         $null = Invoke-Apply $context @('-Approve', $prosePath)
-        $model = Get-TestModel $context 'gemini-4-carbon'
+        $model = Get-TestModel $context $context.TargetId
         Assert-True ($model.caps.prose.score -eq 8) 'Explicit unlock approval failed.'
         Assert-True (-not $model.caps.prose.locked) 'Explicit unlock did not unlock.'
         Assert-True ($model.caps.prose.approved_score -eq 8) 'Approval did not update anchor.'
@@ -324,7 +335,7 @@ try {
             $context = New-Context ('evidence-' + $shape)
             Mutate-Registry $context {
                 param($registry)
-                $model = @($registry.models | Where-Object { $_.id -eq 'gemini-4-carbon' })[0]
+                $model = @($registry.models | Where-Object { $_.id -eq $context.TargetId })[0]
                 $cap = $model.caps.prose
                 if ($shape -eq 'missing') {
                     [void]$cap.PSObject.Properties.Remove('evidence')
@@ -349,18 +360,18 @@ try {
                     $cap | Add-Member -MemberType NoteProperty -Name evidence -Value $oldEvidence -Force
                 }
             }
-            $beforeCap = (Get-TestModel $context 'gemini-4-carbon').caps.prose
+            $beforeCap = (Get-TestModel $context $context.TargetId).caps.prose
             $beforeJson = ConvertTo-Json -InputObject $beforeCap -Depth 32 -Compress
             $research = New-Refresh $context
             $research.caps.prose.score = 8
             $result = Invoke-Apply $context @('-ResearchFile', (Save-Research $context $research))
-            $afterCap = (Get-TestModel $context 'gemini-4-carbon').caps.prose
+            $afterCap = (Get-TestModel $context $context.TargetId).caps.prose
             $afterJson = ConvertTo-Json -InputObject $afterCap -Depth 32 -Compress
             Assert-True ($beforeJson -ceq $afterJson) ('Research changed a locked cap: ' + $shape)
 
             $proposalPath = Find-CapProposal $result 'prose'
             $proposal = Read-JsonFile -Path $proposalPath
-            $evidenceOps = @($proposal.patch | Where-Object { $_.path -eq 'models[id=gemini-4-carbon].caps.prose.evidence' })
+            $evidenceOps = @($proposal.patch | Where-Object { $_.path -eq "models[id=$($context.TargetId)].caps.prose.evidence" })
             Assert-True ($evidenceOps.Count -eq 1) ('Wrong evidence operation count: ' + $shape)
             $operation = $evidenceOps[0]
             if ($shape -in @('missing', 'null')) {
@@ -381,11 +392,11 @@ try {
 
             $preview = Invoke-Apply $context @('-Approve', $proposalPath, '-DryRun')
             Assert-True $preview.dry_run ('One-time approval preview failed: ' + $shape)
-            Assert-True ((Get-TestModel $context 'gemini-4-carbon').caps.prose.locked) 'Preview changed the lock.'
+            Assert-True ((Get-TestModel $context $context.TargetId).caps.prose.locked) 'Preview changed the lock.'
 
             $null = Invoke-WithLock -Paths $context.Paths -Name registry -ScriptBlock {
                 foreach ($item in @($proposal.patch)) {
-                    if ($item.path -eq 'models[id=gemini-4-carbon].caps.prose.score') {
+                    if ($item.path -eq "models[id=$($context.TargetId)].caps.prose.score") {
                         $item.unlock = $true
                     }
                 }
@@ -397,7 +408,7 @@ try {
             Assert-True ((Read-TestRegistry $context).registry_rev -eq $revision) 'Approval dry run changed registry.'
 
             $null = Invoke-Apply $context @('-Approve', $proposalPath)
-            $cap = (Get-TestModel $context 'gemini-4-carbon').caps.prose
+            $cap = (Get-TestModel $context $context.TargetId).caps.prose
             Assert-True ($cap.score -eq 8 -and $cap.approved_score -eq 8 -and -not $cap.locked) ('Approval failed: ' + $shape)
             Assert-True ($cap.evidence -is [array]) ('Applied evidence lost array type: ' + $shape)
             Assert-True ($cap.evidence.Count -eq 1) ('Applied evidence gained a wrapper: ' + $shape)
@@ -413,14 +424,14 @@ try {
         $proposalPath = Find-CapProposal $result 'prose'
         Mutate-Registry $context {
             param($registry)
-            $model = @($registry.models | Where-Object { $_.id -eq 'gemini-4-carbon' })[0]
+            $model = @($registry.models | Where-Object { $_.id -eq $context.TargetId })[0]
             $model.caps.prose | Add-Member -MemberType NoteProperty -Name evidence -Value @() -Force
         }
         $null = Invoke-WithLock -Paths $context.Paths -Name registry -ScriptBlock {
             $proposal = Read-JsonFile -Path $proposalPath
             $proposal.base_rev = (Read-TestRegistry $context).registry_rev
             foreach ($operation in @($proposal.patch)) {
-                if ($operation.path -eq 'models[id=gemini-4-carbon].caps.prose.score') {
+                if ($operation.path -eq "models[id=$($context.TargetId)].caps.prose.score") {
                     $operation.unlock = $true
                 }
             }
@@ -428,9 +439,9 @@ try {
         }
         $revision = (Read-TestRegistry $context).registry_rev
         $blocked = Invoke-Apply $context @('-Approve', $proposalPath) 2
-        Assert-True ($blocked.error -eq 'ORCHESTRA_ARGS: old_value conflict: models[id=gemini-4-carbon].caps.prose.evidence') 'A real null-to-empty evidence change was ignored.'
+        Assert-True ($blocked.error -eq "ORCHESTRA_ARGS: old_value conflict: models[id=$($context.TargetId)].caps.prose.evidence") 'A real null-to-empty evidence change was ignored.'
         Assert-True ((Read-TestRegistry $context).registry_rev -eq $revision) 'Rejected approval changed revision.'
-        Assert-True ((Get-TestModel $context 'gemini-4-carbon').caps.prose.locked) 'Rejected approval unlocked the cap.'
+        Assert-True ((Get-TestModel $context $context.TargetId).caps.prose.locked) 'Rejected approval unlocked the cap.'
     }
 
     Run-Case 'cumulative-drift-uses-approved-score' {
@@ -440,13 +451,13 @@ try {
             $research.caps.code_rigor.score = $target
             $null = Invoke-Apply $context @('-ResearchFile', (Save-Research $context $research))
         }
-        $model = Get-TestModel $context 'gemini-4-carbon'
+        $model = Get-TestModel $context $context.TargetId
         Assert-True ($model.caps.code_rigor.score -eq 9) 'Allowed cumulative delta 2 failed.'
         Assert-True ($model.caps.code_rigor.approved_score -eq 7) 'Anchor drifted.'
         $research = New-Refresh $context
         $research.caps.code_rigor.score = 10
         $result = Invoke-Apply $context @('-ResearchFile', (Save-Research $context $research))
-        Assert-True ((Get-TestModel $context 'gemini-4-carbon').caps.code_rigor.score -eq 9) 'Cumulative delta 3 applied.'
+        Assert-True ((Get-TestModel $context $context.TargetId).caps.code_rigor.score -eq 9) 'Cumulative delta 3 applied.'
         $null = Find-CapProposal $result 'code_rigor'
     }
 
@@ -462,7 +473,7 @@ try {
         }
         $approved = Invoke-Apply $context @('-Approve', $proposalPath)
         Assert-True $approved.rebased 'Unrelated revision did not auto-rebase.'
-        Assert-True ((Get-TestModel $context 'gemini-4-carbon').caps.math.approved_score -eq 10) 'Rebased approval failed.'
+        Assert-True ((Get-TestModel $context $context.TargetId).caps.math.approved_score -eq 10) 'Rebased approval failed.'
         Assert-True (Test-Path -LiteralPath $approved.approved) 'Approved archive missing.'
         $archive = Read-JsonFile -Path $approved.approved
         Assert-True ($archive.base_rev -gt $archive.original_base_rev) 'Archive did not preserve rebase provenance.'
@@ -478,7 +489,7 @@ try {
         $proposalPath = Find-CapProposal $result 'math'
         Mutate-Registry $context {
             param($registry)
-            $model = @($registry.models | Where-Object { $_.id -eq 'gemini-4-carbon' })[0]
+            $model = @($registry.models | Where-Object { $_.id -eq $context.TargetId })[0]
             $model.caps.math.score = 8
         }
         $null = Invoke-WithLock -Paths $context.Paths -Name registry -ScriptBlock {
@@ -487,9 +498,9 @@ try {
             Write-JsonAtomic -Path $proposalPath -Object $proposal
         }
         $null = Invoke-Apply $context @('-Approve', $proposalPath) 2
-        Assert-True ((Get-TestModel $context 'gemini-4-carbon').caps.math.score -eq 8) 'old_value conflict was ignored.'
+        Assert-True ((Get-TestModel $context $context.TargetId).caps.math.score -eq 8) 'old_value conflict was ignored.'
         $null = Invoke-Apply $context @('-Approve', $proposalPath, '-Force')
-        Assert-True ((Get-TestModel $context 'gemini-4-carbon').caps.math.score -eq 10) 'Explicit forced conflict override failed.'
+        Assert-True ((Get-TestModel $context $context.TargetId).caps.math.score -eq 10) 'Explicit forced conflict override failed.'
     }
 
     Run-Case 'rollback-monotonic-and-force-guard' {
@@ -575,7 +586,7 @@ try {
         $research.caps.code_rigor.score = 8
         $research.caps.backend.score = 6
         $research.caps.math.score = 8
-        $before = Get-TestModel $context 'gemini-4-carbon'
+        $before = Get-TestModel $context $context.TargetId
         $crossPath = Join-Path $context.Directory 'cross-check.json'
         Write-JsonAtomic -Path $crossPath -Object ([pscustomobject]@{
             disputed = @(
@@ -584,7 +595,7 @@ try {
             )
         })
         $result = Invoke-Apply $context @('-ResearchFile', (Save-Research $context $research), '-CrossCheckFile', $crossPath)
-        $after = Get-TestModel $context 'gemini-4-carbon'
+        $after = Get-TestModel $context $context.TargetId
         foreach ($cap in @('code_rigor', 'backend')) {
             $old = ConvertTo-Json -InputObject $before.caps.PSObject.Properties[$cap].Value -Depth 32 -Compress
             $new = ConvertTo-Json -InputObject $after.caps.PSObject.Properties[$cap].Value -Depth 32 -Compress
@@ -595,7 +606,7 @@ try {
             $null = Invoke-Apply $context @('-Approve', $proposalPath)
         }
         Assert-True ($after.caps.math.score -eq 8) 'Undisputed small update did not apply.'
-        $approved = Get-TestModel $context 'gemini-4-carbon'
+        $approved = Get-TestModel $context $context.TargetId
         Assert-True ($approved.caps.code_rigor.score -eq 8) 'Explicit approval did not apply research score.'
         Assert-True ($approved.caps.backend.score -eq 9) 'Explicit approval did not apply suggested score.'
     }
@@ -612,7 +623,7 @@ try {
         $third = Invoke-Apply $context @('-Approve', (Find-CapProposal $result 'prose'))
         Assert-True (-not $first.rebased) 'First proposal unexpectedly rebased.'
         Assert-True ($second.rebased -and $third.rebased) 'Later proposals required Force instead of auto-rebasing.'
-        $model = Get-TestModel $context 'gemini-4-carbon'
+        $model = Get-TestModel $context $context.TargetId
         Assert-True ($model.caps.code_rigor.score -eq 10 -and $model.caps.math.score -eq 10 -and $model.caps.prose.score -eq 8) 'Sequential approval lost a change.'
         Assert-True $model.caps.prose.locked 'Ordinary approval permanently unlocked prose.'
     }
@@ -625,7 +636,7 @@ try {
         $research.caps.prose.score = 8
         $result = Invoke-Apply $context @('-ResearchFile', (Save-Research $context $research))
         $revision = (Read-TestRegistry $context).registry_rev
-        $preview = Invoke-Apply $context @('-ApproveAll', 'gemini-4-carbon', '-DryRun')
+        $preview = Invoke-Apply $context @('-ApproveAll', $context.TargetId, '-DryRun')
         Assert-True (@($preview.approvals).Count -eq 3) 'Batch preview omitted proposals.'
         Assert-True ((Read-TestRegistry $context).registry_rev -eq $revision) 'Batch preview changed revision.'
         foreach ($path in @($result.proposals)) {
@@ -635,7 +646,7 @@ try {
         Assert-True (@($batch.approvals).Count -eq 3) 'Batch did not approve all matching proposals.'
         Assert-True (@($batch.rejected_proposals).Count -eq 0) 'Batch incorrectly rejected a sibling proposal.'
         Assert-True ($batch.registry_rev -eq $revision + 3) 'Batch revisions are not sequential.'
-        $empty = Invoke-Apply $context @('-ApproveAll', 'gemini-4-carbon')
+        $empty = Invoke-Apply $context @('-ApproveAll', $context.TargetId)
         Assert-True (@($empty.approvals).Count -eq 0) 'Batch replay reapplied archived proposals.'
     }
 
@@ -649,14 +660,14 @@ try {
         $conflicting = Find-CapProposal $result 'math'
         Mutate-Registry $context {
             param($registry)
-            $model = @($registry.models | Where-Object { $_.id -eq 'gemini-4-carbon' })[0]
+            $model = @($registry.models | Where-Object { $_.id -eq $context.TargetId })[0]
             $model.caps.math.score = 8
         }
-        $batch = Invoke-Apply $context @('-ApproveAll', 'gemini-4-carbon') 2
+        $batch = Invoke-Apply $context @('-ApproveAll', $context.TargetId) 2
         Assert-True (@($batch.approvals).Count -eq 2) 'Conflict blocked unrelated proposals.'
         Assert-True (@($batch.rejected_proposals).Count -eq 1) 'Conflict was not reported.'
         Assert-True (Test-Path -LiteralPath $conflicting) 'Conflicting proposal was archived.'
-        $model = Get-TestModel $context 'gemini-4-carbon'
+        $model = Get-TestModel $context $context.TargetId
         Assert-True ($model.caps.math.score -eq 8) 'Conflict overwrote the current score.'
         Assert-True ($model.caps.code_rigor.score -eq 10 -and $model.caps.prose.score -eq 8) 'Unrelated batch approval failed.'
     }
@@ -667,13 +678,13 @@ try {
         $research.caps.prose.score = 8
         $result = Invoke-Apply $context @('-ResearchFile', (Save-Research $context $research))
         $null = Invoke-Apply $context @('-Approve', (Find-CapProposal $result 'prose'))
-        $model = Get-TestModel $context 'gemini-4-carbon'
+        $model = Get-TestModel $context $context.TargetId
         Assert-True ($model.caps.prose.score -eq 8 -and $model.caps.prose.approved_score -eq 8) 'One-time approval did not anchor the score.'
         Assert-True $model.caps.prose.locked 'One-time approval cleared locked.'
         $research = New-Refresh $context
         $research.caps.prose.score = 9
         $result = Invoke-Apply $context @('-ResearchFile', (Save-Research $context $research))
-        $model = Get-TestModel $context 'gemini-4-carbon'
+        $model = Get-TestModel $context $context.TargetId
         Assert-True ($model.caps.prose.score -eq 8 -and $model.caps.prose.locked) 'Later refresh bypassed the retained lock.'
         $null = Find-CapProposal $result 'prose'
     }
@@ -787,7 +798,7 @@ try {
         $text = Get-Content -LiteralPath $outFile -Raw -Encoding UTF8
         Assert-True ($text -notmatch '\{\{[A-Z_]+\}\}') 'Unresolved template token.'
         Assert-True ($text -match 'fake-model-9') 'Model placeholder missing.'
-        Assert-True ($text -match '(?m)^- prose: gemini-4-carbon \(10\)\s*$') 'Wrong prose incumbent format.'
+        Assert-True ($text -match ('(?m)^- prose: ' + [regex]::Escape($context.TargetId) + ' \(10\)\s*$')) 'Wrong prose incumbent format.'
         Assert-True ($text -notmatch '(?m)^---\s*$') 'Included the next protocol section.'
         Assert-True ($text -notmatch 'cross-check-') 'Included protocol orchestration instructions.'
         $bytes = [IO.File]::ReadAllBytes($outFile)
@@ -804,7 +815,7 @@ try {
         })
         $research.caps.prose.score = 10
         $research.caps.prose.vs_incumbent = 1
-        $research.supersedes = 'gemini-4-carbon'
+        $research.supersedes = $context.TargetId
         $research.suggested_hard_rules = @([pscustomobject]@{
             id = 'synthetic-test-rule'
             when_tags_any = @('prose')
@@ -813,8 +824,8 @@ try {
         })
         $result = Invoke-Apply $context @('-ResearchFile', (Save-Research $context $research))
         $registry = Read-TestRegistry $context
-        Assert-True ($registry.aliases.'best-prose' -eq 'gemini-4-carbon') 'Alias changed without approval.'
-        Assert-True ((Get-TestModel $context 'gemini-4-carbon').status -eq 'active') 'Incumbent retired without approval.'
+        Assert-True ($registry.aliases.'best-prose' -eq $context.TargetId) 'Alias changed without approval.'
+        Assert-True ((Get-TestModel $context $context.TargetId).status -eq 'active') 'Incumbent retired without approval.'
         Assert-True (@($registry.hard_rules | Where-Object { $_.id -eq 'synthetic-test-rule' }).Count -eq 0) 'Rule applied without approval.'
         Assert-True (@($result.proposals).Count -ge 3) 'Missing alias, retirement, or hard-rule proposal.'
         $listed = Invoke-Apply $context @('-ListProposals')
@@ -830,6 +841,117 @@ try {
         Assert-True ($model.caps.prose.score -eq 5) 'No-family score must be capped at 5.'
         Assert-True ($model.caps.prose.confidence -eq 0.2) 'Wrong no-family confidence.'
         Assert-True ($model.caps.prose.source -eq 'inherited') 'Wrong no-family source.'
+    }
+
+    Run-Case 'codex-candidate-uses-high-effort-and-inherits-rotation' {
+        $context = New-Context 'codex-new'
+        $research = Read-Sample
+        $research.model_id = 'gpt-7-synthetic'
+        $research.family = 'openai-gpt'
+        $research.generation = '7'
+        $research.vendor = 'openai'
+        $research.channel = 'codex'
+        $research.supersedes = $null
+        $null = Invoke-Apply $context @('-ResearchFile', (Save-Research $context $research))
+        $model = Get-TestModel $context 'gpt-7-synthetic'
+        Assert-True ($null -ne $model) 'Codex candidate was not added.'
+        Assert-True ($model.invoke.default_effort -eq 'high') ('Expected default_effort high, got ' + $model.invoke.default_effort)
+        Assert-True ([bool]$model.invoke.account_rotation) 'Codex candidate did not inherit account_rotation from active codex donor.'
+        Assert-True ([int]$model.invoke.rotation_max_retries -ge 1) 'Codex candidate did not inherit rotation_max_retries.'
+        Assert-True ([int]$model.invoke.exhausted_minutes -gt 0) 'Codex candidate did not inherit exhausted_minutes.'
+    }
+
+    Run-Case 'probe-and-telemetry-source-proposals-approve-and-deduplicate' {
+        $context = New-Context 'probe-telemetry-proposals'
+        $registry = Read-TestRegistry $context
+        $target = @($registry.models | Where-Object { $_.status -eq 'active' })[0]
+        $targetId = [string]$target.id
+        [void][IO.Directory]::CreateDirectory($context.Paths.Proposals)
+
+        $probePropPath = Join-Path $context.Paths.Proposals '20261110-120000-probe-test.json'
+        $probeProposal = [pscustomobject]@{
+            proposal_id = '20261110-120000-probe-test'
+            model_id = $targetId
+            base_rev = [long]$registry.registry_rev
+            created_at = '2026-11-10T12:00:00Z'
+            status = 'pending'
+            reason = 'Synthetic blind probe calibration.'
+            patch = @(
+                [pscustomobject]@{
+                    op = 'set'
+                    path = "models[id=$targetId].caps.long_context.score"
+                    old_value = $target.caps.long_context.score
+                    value = 9.0
+                    unlock = $false
+                },
+                [pscustomobject]@{
+                    op = 'set'
+                    path = "models[id=$targetId].caps.long_context.source"
+                    old_value = $target.caps.long_context.source
+                    value = 'probe'
+                    unlock = $false
+                },
+                [pscustomobject]@{
+                    op = 'set'
+                    path = "models[id=$targetId].caps.long_context.evidence"
+                    old_value = (Get-OrchestraProperty $target.caps.long_context 'evidence' $null)
+                    value = @([pscustomobject]@{
+                        url = 'probe://evals/probe/05-knowledge.md'
+                        claim = 'Blind probe scored 13.5/15 (9.0/10).'
+                        date = '2026-11-10'
+                    })
+                    unlock = $false
+                }
+            )
+        }
+        Write-JsonAtomic -Path $probePropPath -Object $probeProposal
+        Assert-True (Test-PendingProposalConflict -Paths $context.Paths -ModelId $targetId -PatchPaths @("models[id=$targetId].caps.long_context.score")) 'Conflict detector missed pending probe proposal.'
+
+        $null = Invoke-Apply $context @('-Approve', $probePropPath)
+        $afterProbe = Get-TestModel $context $targetId
+        Assert-True ($afterProbe.caps.long_context.score -eq 9.0 -and $afterProbe.caps.long_context.source -eq 'probe') 'Probe proposal failed to apply.'
+        Assert-True (-not (Test-PendingProposalConflict -Paths $context.Paths -ModelId $targetId -PatchPaths @("models[id=$targetId].caps.long_context.score"))) 'Approved proposal still flagged as conflict.'
+
+        $telPropPath = Join-Path $context.Paths.Proposals '20261110-120100-telemetry-test.json'
+        $telProposal = [pscustomobject]@{
+            proposal_id = '20261110-120100-telemetry-test'
+            model_id = $targetId
+            base_rev = [long](Read-TestRegistry $context).registry_rev
+            created_at = '2026-11-10T12:01:00Z'
+            status = 'pending'
+            reason = 'Synthetic 30-day telemetry calibration.'
+            patch = @(
+                [pscustomobject]@{
+                    op = 'set'
+                    path = "models[id=$targetId].caps.long_context.score"
+                    old_value = 9.0
+                    value = 8.0
+                    unlock = $false
+                },
+                [pscustomobject]@{
+                    op = 'set'
+                    path = "models[id=$targetId].caps.long_context.source"
+                    old_value = 'probe'
+                    value = 'telemetry'
+                    unlock = $false
+                },
+                [pscustomobject]@{
+                    op = 'set'
+                    path = "models[id=$targetId].caps.long_context.evidence"
+                    old_value = $afterProbe.caps.long_context.evidence
+                    value = @([pscustomobject]@{
+                        url = "telemetry://usage/$targetId/long_context"
+                        claim = '30d bad outcome rate 45% (n=11).'
+                        date = '2026-11-10'
+                    })
+                    unlock = $false
+                }
+            )
+        }
+        Write-JsonAtomic -Path $telPropPath -Object $telProposal
+        $null = Invoke-Apply $context @('-Approve', $telPropPath)
+        $afterTel = Get-TestModel $context $targetId
+        Assert-True ($afterTel.caps.long_context.score -eq 8.0 -and $afterTel.caps.long_context.source -eq 'telemetry') 'Telemetry proposal failed to apply.'
     }
 }
 catch {

@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param()
 
 Set-StrictMode -Version Latest
@@ -26,6 +26,14 @@ function Get-OrchestraProperty {
         if ($null -ne $property) { return ,$property.Value }
     }
     return ,$Default
+}
+
+function Get-OrchestraArray {
+    param($Object, [string]$Name)
+    $value = Get-OrchestraProperty $Object $Name @()
+    foreach ($item in $value) {
+        if ($null -ne $item) { $item }
+    }
 }
 
 function Set-OrchestraProperty {
@@ -1086,4 +1094,333 @@ function Get-OrchestraExitCode {
     if ($Message -match '^ORCHESTRA_QUOTA:') { return 4 }
     if ($Message -match '^ORCHESTRA_LOCK') { return 5 }
     return 3
+}
+
+function Get-OrchestraEventKey {
+    param($Event)
+    if ($null -eq $Event) { return $null }
+    $type = [string](Get-OrchestraProperty $Event 'type')
+    $id = [string](Get-OrchestraProperty $Event 'invocation_id')
+    $ts = [string](Get-OrchestraProperty $Event 'ts')
+    if ($type -eq 'invocation' -and -not [string]::IsNullOrWhiteSpace($id)) {
+        return ('invocation:' + $id)
+    }
+    if ($type -eq 'outcome' -and -not [string]::IsNullOrWhiteSpace($id)) {
+        $outcome = [string](Get-OrchestraProperty $Event 'outcome')
+        $note = [string](Get-OrchestraProperty $Event 'note')
+        return ('outcome:{0}:{1}:{2}:{3}' -f $id, $ts, $outcome, $note)
+    }
+    return ('raw:' + (ConvertTo-Json -InputObject $Event -Depth 32 -Compress))
+}
+
+function Write-LinesAtomic {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [AllowEmptyCollection()][string[]]$Lines = @()
+    )
+    $target = [IO.Path]::GetFullPath($Path)
+    $directory = [IO.Path]::GetDirectoryName($target)
+    [void][IO.Directory]::CreateDirectory($directory)
+    $temporary = Join-Path $directory (
+        '.' + [IO.Path]::GetFileName($target) + '.' +
+        [Guid]::NewGuid().ToString('N') + '.tmp'
+    )
+    try {
+        $content = ''
+        if ($Lines.Count -gt 0) {
+            $content = ($Lines -join "`n") + "`n"
+        }
+        [IO.File]::WriteAllText($temporary, $content, $script:OrchestraUtf8)
+        if ([IO.File]::Exists($target)) {
+            [IO.File]::Replace($temporary, $target, [NullString]::Value)
+        }
+        else {
+            [IO.File]::Move($temporary, $target)
+        }
+    }
+    finally {
+        if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
+    }
+}
+
+function Compact-UsageLedger {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Paths,
+        [long]$MaxBytes = 2097152,
+        [int]$RetainDays = 90,
+        [switch]$Force
+    )
+    if ($MaxBytes -lt 0 -or $RetainDays -lt 1) {
+        throw 'ORCHESTRA_ARGS: Invalid usage compaction thresholds.'
+    }
+    $work = {
+        if (-not [IO.File]::Exists($Paths.Usage)) {
+            return @{
+                compacted = $false; archived_count = 0
+                cold_removed_count = 0; hot_count = 0; archive_files = @()
+            }
+        }
+        $usageInfo = Get-Item -LiteralPath $Paths.Usage
+        if (-not $Force -and $usageInfo.Length -le $MaxBytes) {
+            return @{
+                compacted = $false; archived_count = 0
+                cold_removed_count = 0; hot_count = 0; archive_files = @()
+            }
+        }
+
+        $cutoff = (Get-OrchestraNow).AddDays(-$RetainDays)
+        $records = New-Object 'System.Collections.Generic.List[object]'
+        $hotIds = @{}
+        $stream = [IO.File]::Open(
+            $Paths.Usage, [IO.FileMode]::Open,
+            [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite
+        )
+        $reader = New-Object IO.StreamReader($stream, $script:OrchestraUtf8, $true)
+        try {
+            while ($null -ne ($line = $reader.ReadLine())) {
+                if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                $parsed = $null
+                $tsUtc = $null
+                $hasTs = $false
+                try {
+                    $parsed = $line | ConvertFrom-Json
+                }
+                catch {
+                    $parsed = $null
+                }
+                if ($null -eq $parsed) {
+                    [void]$records.Add([pscustomobject]@{
+                        raw = $line; key = ('corrupt:' + $line)
+                        id = ''; month = 'unknown'; always_hot = $true
+                    })
+                    continue
+                }
+                $id = [string](Get-OrchestraProperty $parsed 'invocation_id')
+                $rawTs = [string](Get-OrchestraProperty $parsed 'ts')
+                $month = 'unknown'
+                if (-not [string]::IsNullOrWhiteSpace($rawTs)) {
+                    try {
+                        $tsUtc = ConvertTo-OrchestraUtc $rawTs
+                        $hasTs = $true
+                        $month = $tsUtc.ToString('yyyyMM')
+                    }
+                    catch { $hasTs = $false }
+                }
+                $isRecent = (-not $hasTs) -or ($tsUtc -ge $cutoff)
+                if ($isRecent -and -not [string]::IsNullOrWhiteSpace($id)) {
+                    $hotIds[$id] = $true
+                }
+                $normalizedLine = ConvertTo-Json -InputObject $parsed -Depth 32 -Compress
+                [void]$records.Add([pscustomobject]@{
+                    raw = $normalizedLine
+                    key = (Get-OrchestraEventKey $parsed)
+                    id = $id
+                    month = $month
+                    always_hot = $isRecent
+                })
+            }
+        }
+        finally { $reader.Dispose() }
+
+        $hotCandidates = New-Object 'System.Collections.Generic.List[object]'
+        $coldByMonth = @{}
+        $coldRemovedCount = 0
+
+        foreach ($rec in $records) {
+            $keepHot = [bool]$rec.always_hot -or (
+                -not [string]::IsNullOrWhiteSpace($rec.id) -and
+                $hotIds.ContainsKey($rec.id)
+            )
+            if ($keepHot) {
+                [void]$hotCandidates.Add($rec)
+            }
+            else {
+                $coldRemovedCount++
+                if (-not $coldByMonth.ContainsKey($rec.month)) {
+                    $coldByMonth[$rec.month] = New-Object 'System.Collections.Generic.List[object]'
+                }
+                [void]$coldByMonth[$rec.month].Add($rec)
+            }
+        }
+
+        $lastHotIdx = @{}
+        for ($hi = 0; $hi -lt $hotCandidates.Count; $hi++) {
+            $lastHotIdx[$hotCandidates[$hi].key] = $hi
+        }
+        $hotLines = New-Object 'System.Collections.Generic.List[string]'
+        for ($hi = 0; $hi -lt $hotCandidates.Count; $hi++) {
+            if ($lastHotIdx[$hotCandidates[$hi].key] -eq $hi) {
+                [void]$hotLines.Add([string]$hotCandidates[$hi].raw)
+            }
+        }
+
+        $archiveDir = Join-Path $Paths.StateDir 'archive'
+        $touchedArchives = New-Object 'System.Collections.Generic.List[string]'
+        $newlyArchived = 0
+
+        foreach ($month in @($coldByMonth.Keys | Sort-Object)) {
+            $archivePath = Join-Path $archiveDir ("usage-$month.jsonl")
+            $combinedArch = New-Object 'System.Collections.Generic.List[object]'
+            $preExistingKeys = @{}
+            if ([IO.File]::Exists($archivePath)) {
+                $archStream = [IO.File]::Open(
+                    $archivePath, [IO.FileMode]::Open,
+                    [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite
+                )
+                $archReader = New-Object IO.StreamReader($archStream, $script:OrchestraUtf8, $true)
+                try {
+                    while ($null -ne ($aLine = $archReader.ReadLine())) {
+                        if ([string]::IsNullOrWhiteSpace($aLine)) { continue }
+                        $aKey = 'corrupt:' + $aLine
+                        try {
+                            $aObj = $aLine | ConvertFrom-Json
+                            if ($null -ne $aObj) { $aKey = Get-OrchestraEventKey $aObj }
+                        }
+                        catch {}
+                        $preExistingKeys[$aKey] = $true
+                        [void]$combinedArch.Add([pscustomobject]@{ key = $aKey; raw = $aLine })
+                    }
+                }
+                finally { $archReader.Dispose() }
+            }
+            $addedKeysThisBatch = @{}
+            foreach ($coldRec in $coldByMonth[$month]) {
+                if (-not $preExistingKeys.ContainsKey($coldRec.key) -and -not $addedKeysThisBatch.ContainsKey($coldRec.key)) {
+                    $addedKeysThisBatch[$coldRec.key] = $true
+                    $newlyArchived++
+                }
+                [void]$combinedArch.Add([pscustomobject]@{ key = $coldRec.key; raw = [string]$coldRec.raw })
+            }
+            $lastArchIdx = @{}
+            for ($ai = 0; $ai -lt $combinedArch.Count; $ai++) {
+                $lastArchIdx[$combinedArch[$ai].key] = $ai
+            }
+            $mergedLines = New-Object 'System.Collections.Generic.List[string]'
+            for ($ai = 0; $ai -lt $combinedArch.Count; $ai++) {
+                if ($lastArchIdx[$combinedArch[$ai].key] -eq $ai) {
+                    [void]$mergedLines.Add([string]$combinedArch[$ai].raw)
+                }
+            }
+            Write-LinesAtomic -Path $archivePath -Lines $mergedLines.ToArray()
+            [void]$touchedArchives.Add($archivePath)
+        }
+
+        Write-LinesAtomic -Path $Paths.Usage -Lines $hotLines.ToArray()
+        return @{
+            compacted = $true
+            archived_count = [int]$newlyArchived
+            cold_removed_count = [int]$coldRemovedCount
+            hot_count = [int]$hotLines.Count
+            archive_files = $touchedArchives.ToArray()
+        }
+    }
+    if (Test-OrchestraLockHeld -Paths $Paths -Name usage) { return (& $work) }
+    return (Invoke-WithLock -Paths $Paths -Name usage -ScriptBlock $work)
+}
+
+function Remove-OldRegistryHistory {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Paths,
+        [int]$KeepCount = 30
+    )
+    if ($KeepCount -lt 1) {
+        throw 'ORCHESTRA_ARGS: KeepCount must be at least 1.'
+    }
+    $work = {
+        if (-not [IO.Directory]::Exists($Paths.History)) {
+            return @{ removed_count = 0; kept_count = 0; removed = @() }
+        }
+        $protectedRev = -1L
+        if ([IO.File]::Exists($Paths.Registry)) {
+            try {
+                $reg = Read-JsonFile -Path $Paths.Registry
+                if ($null -ne $reg) {
+                    $protectedRev = [long](Get-OrchestraProperty $reg 'registry_rev' 0) - 1L
+                }
+            }
+            catch {}
+        }
+        $files = @(
+            Get-ChildItem -LiteralPath $Paths.History -Filter 'models-*.json' -File |
+                Sort-Object `
+                    @{ Expression = { if ($_.Name -match '^models-(\d{8}-\d{6})-') { $Matches[1] } else { '' } }; Descending = $true },
+                    @{ Expression = { if ($_.Name -match '^models-\d{8}-\d{6}-(\d+)-') { [long]$Matches[1] } else { -1L } }; Descending = $true },
+                    @{ Expression = { $_.Name }; Descending = $true }
+        )
+        $removed = New-Object 'System.Collections.Generic.List[string]'
+        $keptCount = 0
+        for ($i = 0; $i -lt $files.Count; $i++) {
+            $file = $files[$i]
+            if ($i -lt $KeepCount) {
+                $keptCount++
+                continue
+            }
+            $snapRev = -999L
+            if ($file.Name -match '^models-\d{8}-\d{6}-(\d+)-') {
+                $snapRev = [long]$Matches[1]
+            }
+            else {
+                try {
+                    $snap = Read-JsonFile -Path $file.FullName
+                    if ($null -ne $snap) {
+                        $snapRev = [long](Get-OrchestraProperty $snap 'registry_rev' -999)
+                    }
+                }
+                catch {}
+            }
+            if ($protectedRev -ge 0 -and $snapRev -eq $protectedRev) {
+                $keptCount++
+                continue
+            }
+            Remove-Item -LiteralPath $file.FullName -Force
+            [void]$removed.Add($file.FullName)
+        }
+        return @{
+            removed_count = [int]$removed.Count
+            kept_count = [int]$keptCount
+            removed = $removed.ToArray()
+        }
+    }
+    if (Test-OrchestraLockHeld -Paths $Paths -Name registry) { return (& $work) }
+    return (Invoke-WithLock -Paths $Paths -Name registry -ScriptBlock $work)
+}
+
+function Test-PendingProposalConflict {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Paths,
+        [Parameter(Mandatory = $true)][string]$ModelId,
+        [string[]]$PatchPaths = @()
+    )
+    if (-not [IO.Directory]::Exists($Paths.Proposals)) { return $false }
+    $wanted = @{}
+    foreach ($p in @($PatchPaths)) {
+        if (-not [string]::IsNullOrWhiteSpace($p)) { $wanted[$p] = $true }
+    }
+    $files = @(Get-ChildItem -LiteralPath $Paths.Proposals -Filter '*.json' -File)
+    foreach ($file in $files) {
+        if ($file.Name -match '\.approved\.json$') { continue }
+        $proposal = $null
+        try { $proposal = Read-JsonFile -Path $file.FullName } catch { continue }
+        if ($null -eq $proposal) { continue }
+        if ([string](Get-OrchestraProperty $proposal 'status') -ne 'pending') { continue }
+        if ($wanted.Count -eq 0) {
+            if ([string](Get-OrchestraProperty $proposal 'model_id') -ceq $ModelId) { return $true }
+            continue
+        }
+        foreach ($op in @(Get-OrchestraArray $proposal 'patch')) {
+            $opType = [string](Get-OrchestraProperty $op 'op')
+            $opKey = ''
+            if ($opType -eq 'add_hard_rule') {
+                $ruleVal = Get-OrchestraProperty $op 'value'
+                $opKey = 'hard_rules/' + [string](Get-OrchestraProperty $ruleVal 'id')
+            }
+            else {
+                $opKey = [string](Get-OrchestraProperty $op 'path')
+            }
+            if (-not [string]::IsNullOrWhiteSpace($opKey) -and $wanted.ContainsKey($opKey)) {
+                return $true
+            }
+        }
+    }
+    return $false
 }

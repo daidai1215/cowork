@@ -4,23 +4,47 @@
 
 ## 当前主力阵容（默认全开 `high` 档）
 
-| 模型 | 通道 | 核心强项 | 额度与速度特征 |
-|---|---|---|---|
-| **GPT-6 Astra (`high`)** | `codex` | 代码严谨性、后端并发、复杂数学推导、原生 `image_gen` 生图、Office 插件链 | 速度最慢；单号额度较少，支持 **Cockpit 自动切号中断自愈** |
-| **Gemini 4 Carbon (`high`)** | `agy` | 文笔定稿、世界知识综述、1M 超长上下文通读、日常高速 Agentic 工程 | 三家最快、额度最充裕（事实类输出强制叠加 Truth Gate） |
-| **Claude Opus 5.5 (`high`)** | `agy` | 前端 UI 视觉审美、排版品味与复杂架构把关（Aesthetic Gate） | 速度居中、额度最稀缺（仅审多视口截图与 design tokens） |
+<!-- AUTO:ROSTER:START -->
+> 自动同步自 `registry/models.json` (`registry_rev: 3`, 活跃模型: 3)
+
+| 模型 | ID / 通道 | 默认档位 | 顶级长板（>=9） | 额度 (`quota_rank`) | 速度 (`speed_rank`) | 运行特性 |
+|---|---|---|---|---|---|---|
+| **GPT-6 Astra** | `gpt-6-astra` (`codex`) | `high` | backend (10), code_rigor (10), image_gen (10), math (10), agentic_coding (9.5), office_docs (9), world_knowledge (9) | 2 (中等) | 1 (较慢) | Cockpit 自动切号自愈; tools: `image_gen`, `office_plugins`, `latex`, `browser`, `computer_use` |
+| **Claude Opus 5.5** | `claude-opus-5-5` (`agy`) | `high` | frontend_aesthetic (10), agentic_coding (9.5) | 1 (稀缺) | 2 (居中) | tools: `web_search`, `browser` |
+| **Gemini 4 Carbon** | `gemini-4-carbon` (`agy`) | `high` | long_context (10), prose (10), world_knowledge (10), agentic_coding (9) | 3 (充裕) | 3 (最快) | tools: `web_search`, `browser`, `long_context_1m` |
+
+- **可用额度排序（低 → 高）**: Claude Opus 5.5 (`claude-opus-5-5`) < GPT-6 Astra (`gpt-6-astra`) < Gemini 4 Carbon (`gemini-4-carbon`)
+- **响应速度排序（快 → 慢）**: Gemini 4 Carbon (`gemini-4-carbon`) > Claude Opus 5.5 (`claude-opus-5-5`) > GPT-6 Astra (`gpt-6-astra`)
+<!-- AUTO:ROSTER:END -->
+
+### 标准能力别名与自动路由速查
+
+<!-- AUTO:ROUTING:START -->
+- **标准能力别名**: `best-aesthetic` -> `claude-opus-5-5`, `best-image` -> `gpt-6-astra`, `best-knowledge` -> `gemini-4-carbon`, `best-math` -> `gpt-6-astra`, `best-prose` -> `gemini-4-carbon`, `best-rigor` -> `gpt-6-astra`
+
+| 典型场景 | 标签 (`-Tags`) | 主执行 (`primary`) | 审查 (`reviewer`) | 润色 (`polisher`) | 协作模式 (`pattern`) |
+|---|---|---|---|---|---|
+| 前端页面 / 落地页 | `frontend,landing_page` | `gemini-4-carbon` | `claude-opus-5-5` | - | `aesthetic_gate` |
+| 后端 / API / 并发 | `backend,concurrency` | `gpt-6-astra` | `gemini-4-carbon` | - | `pipelined_review` |
+| 数学推导 / 算法 | `math,algorithm` | `gpt-6-astra` | `gemini-4-carbon` | - | `pipelined_review` |
+| 论文 / 长文 / 文案 | `prose,paper` | `gemini-4-carbon` | `gpt-6-astra` | - | `pipelined_review` |
+| 配图 / 插画 / Mockup | `image_gen` | `gpt-6-astra` | `claude-opus-5-5` | - | `strength_delegation` |
+| PPT / Word / Excel | `office,ppt` | `gpt-6-astra` | `claude-opus-5-5` | - | `strength_delegation` |
+| 检索 / 综述 / 大仓库理解 | `research,long_context` | `gemini-4-carbon` | `gpt-6-astra` | - | `pipelined_review` |
+<!-- AUTO:ROUTING:END -->
 
 ## 目录结构
 
 ```text
 cowork/
-├── SKILL.md                          # 主控执行协议（身份识别 → 新模型检测 → 路由 → 协作 → 90s 看门狗）
+├── SKILL.md                          # 主控执行协议（身份识别 → 新模型检测 → 路由 → 协作 → 90s 看门狗 → 自维护）
 ├── registry/
-│   ├── models.json                   # 数据化模型档案（10 维能力分、锁定标记、别名、硬规则、轮换参数）
+│   ├── models.json                   # 数据化模型档案（10 维能力分、锁定标记、别名、硬规则、轮换与自维护策略）
 │   ├── research.schema.json          # 新模型联网调研 JSON Schema
+│   ├── probe-grade.schema.json       # 异构匿名盲评输出 JSON Schema
 │   ├── CHANGELOG.md                  # 档案修订日志
-│   ├── history/                      # 历史版本快照（支持一键回滚）
-│   └── proposals/                    # 待人工确认的调分/别名/下架提案
+│   ├── history/                      # 历史版本快照（定额保留 + 自动保护回滚快照）
+│   └── proposals/                    # 待人工确认的调分/别名/下架提案（跨源按字段路径去重）
 ├── references/
 │   ├── model-profiles.md             # 各主力模型优缺点与避坑指南
 │   ├── collaboration-patterns.md     # 5 种协作模式（含原 gpt-write / gpt-review）与提示词模板
@@ -32,13 +56,17 @@ cowork/
 │   ├── research-prompt.ps1           # 生成新模型联网调研提示词（带防并发租约）
 │   ├── apply-research.ps1            # 分级应用调研结果、生成提案与回滚档案
 │   ├── record-outcome.ps1            # 记录调用结果（ok/redo/fail），驱动候选模型自动转正或淘汰
-│   ├── probe-model.ps1               # 5 道标准小测题快速摸底新模型
+│   ├── probe-model.ps1               # 5 道去剧透标准小测题 + 可选手动异构匿名盲评（-Grade）
+│   ├── calibrate-telemetry.ps1       # 30 天真实返工率与实测耗时自校准提案器
+│   ├── sync-docs.ps1                 # 从 models.json 自动渲染受管文档区块与防漂移校验（-Check）
+│   ├── doctor.ps1                    # 环境自检、Junction 自愈与新版 Codex shell 能力探测
+│   ├── maintain.ps1                  # 一键自我维护与自我升级编排器（含 selftest 门禁回滚与安全 Git 提交）
 │   ├── extract-files.ps1             # 安全落盘文本交付代码块（路径白名单 + 防目录穿越/Junction）
 │   ├── sync-to-codex.ps1             # 创建 ~/.codex/skills/cowork Junction 实现双端同源
-│   ├── selftest.ps1                  # 全量静态检查 + 5 套离线回归测试套件
-│   └── lib/                          # 公共底层库（文件锁、原子写入、SHA-256 凭证指纹、Cockpit 静默等待）
+│   ├── selftest.ps1                  # 全量静态检查 + 文档防漂移门禁 + 6 套离线回归测试套件
+│   └── lib/                          # 公共底层库（文件锁、原子写入、账本幂等归档、SHA-256 凭证指纹、Cockpit 等待）
 ├── evals/                            # 新模型探测题库与测试夹具
-└── tests/                            # 离线回归测试（apply / detect / invoke / probe / route）
+└── tests/                            # 离线回归测试（apply / detect / invoke / maintain / probe / route）
 ```
 
 ## 安装与双端同步（Windows PowerShell）

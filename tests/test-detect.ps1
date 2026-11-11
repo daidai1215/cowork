@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
 Run isolated detector regression tests.
 .DESCRIPTION
@@ -58,13 +58,13 @@ function Get-DTestModel {
 }
 
 function Write-DAgyFixture {
-    param([switch]$Fake, [switch]$WithoutOpus)
+    param([switch]$Fake, [switch]$WithoutTargetAgy)
     $registryCopy = Read-DTestRegistry
     $lines = @(
         'Fetching available models...'
         foreach ($catalogModel in @($registryCopy.models)) {
             if ($catalogModel.channel -ne 'agy') { continue }
-            if ($WithoutOpus -and $catalogModel.id -eq 'claude-opus-5-5') {
+            if ($WithoutTargetAgy -and $catalogModel.id -eq $script:targetAgyId) {
                 continue
             }
             foreach ($effortName in @('low', 'medium', 'high')) {
@@ -158,12 +158,23 @@ try {
     $script:codexFixture = Join-Path $temp 'codex-catalog.txt'
 
     $fixture = Read-JsonFile -Path $sourcePaths.Registry
+    $activeCodex = @($fixture.models | Where-Object { $_.channel -eq 'codex' -and $_.status -eq 'active' })
+    $activeAgy = @($fixture.models | Where-Object { $_.channel -eq 'agy' -and $_.status -eq 'active' })
+    if ($activeCodex.Count -lt 1 -or $activeAgy.Count -lt 2) {
+        throw 'Fixture requires at least 1 active codex model and 2 active agy models.'
+    }
+    $script:targetCodexId = [string]$activeCodex[0].id
+    $script:targetAgyId = [string]$activeAgy[0].id
+    $script:staleAgyId = [string]$activeAgy[1].id
     foreach ($fixtureModel in @($fixture.models)) {
-        if ($fixtureModel.id -eq 'gpt-6-astra') {
+        if ($fixtureModel.id -eq $script:targetCodexId) {
             $fixtureModel.last_researched = $null
         }
-        elseif ($fixtureModel.id -eq 'gemini-4-carbon') {
+        elseif ($fixtureModel.id -eq $script:staleAgyId) {
             $fixtureModel.last_researched = '2026-09-01'
+        }
+        else {
+            $fixtureModel.last_researched = '2026-11-10'
         }
     }
     Invoke-WithLock -Paths $script:detectPaths -Name registry -ScriptBlock {
@@ -183,9 +194,9 @@ try {
         @($r.source_errors).Count -eq 0
     ) 'large non-JSON catalog is supported'
     Assert-DTest (
-        @($r.stale) -contains 'gpt-6-astra' -and
-        @($r.stale) -contains 'gemini-4-carbon' -and
-        @($r.stale) -notcontains 'claude-opus-5-5'
+        @($r.stale) -contains $script:targetCodexId -and
+        @($r.stale) -contains $script:staleAgyId -and
+        @($r.stale) -notcontains $script:targetAgyId
     ) 'missing and old research dates are stale'
 
     $state = Read-DTestState
@@ -248,15 +259,15 @@ try {
         @($state.sources.agy.baseline_slugs) -notcontains 'fake-model-9'
     ) 'later discovery does not overwrite the original baseline'
 
-    Write-DAgyFixture -Fake -WithoutOpus
+    Write-DAgyFixture -Fake -WithoutTargetAgy
     $run = Invoke-DTest -Forced
     Assert-DTest (
         @($run.Result.removed).Count -eq 0 -and
-        (Get-DTestModel 'claude-opus-5-5').status -eq 'active'
+        (Get-DTestModel $script:targetAgyId).status -eq 'active'
     ) 'first successful missing scan does not remove a model'
     $state = Read-DTestState
     Assert-DTest (
-        $state.sources.agy.missing_counts.'claude-opus-5-5' -eq 1
+        (Get-OrchestraProperty $state.sources.agy.missing_counts $script:targetAgyId) -eq 1
     ) 'first successful miss is counted'
 
     Write-DText $script:agyFixture (
@@ -270,17 +281,17 @@ try {
     ) 'invalid agy output is a source failure'
     Assert-DTest (
         @($run.Result.removed).Count -eq 0 -and
-        (Get-DTestModel 'claude-opus-5-5').status -eq 'active'
+        (Get-DTestModel $script:targetAgyId).status -eq 'active'
     ) 'failed agy source cannot remove models'
     $state = Read-DTestState
     Assert-DTest (
-        $state.sources.agy.missing_counts.'claude-opus-5-5' -eq 1 -and
+        (Get-OrchestraProperty $state.sources.agy.missing_counts $script:targetAgyId) -eq 1 -and
         $state.sources.agy.consecutive_failures -eq 1
     ) 'failure preserves missing count and increments failure count'
     $lastAttempt = $state.sources.agy.last_attempt
 
     $env:MODEL_ORCHESTRA_NOW = '2026-11-10T13:30:00Z'
-    Write-DAgyFixture -Fake -WithoutOpus
+    Write-DAgyFixture -Fake -WithoutTargetAgy
     $run = Invoke-DTest
     $state = Read-DTestState
     Assert-DTest (
@@ -293,12 +304,12 @@ try {
     Assert-DTest (
         $run.Exit -eq 0 -and
         @($run.Result.removed).Count -eq 1 -and
-        @($run.Result.removed) -contains 'claude-opus-5-5' -and
-        (Get-DTestModel 'claude-opus-5-5').status -eq 'unavailable'
+        @($run.Result.removed) -contains $script:targetAgyId -and
+        (Get-DTestModel $script:targetAgyId).status -eq 'unavailable'
     ) 'retry after one hour removes only the deliberately missing model'
 
-    $opus = Get-DTestModel 'claude-opus-5-5'
-    Assert-DTest ($opus.previous_status -eq 'active') 'removal preserves previous status'
+    $removedAgy = Get-DTestModel $script:targetAgyId
+    Assert-DTest ($removedAgy.previous_status -eq 'active') 'removal preserves previous status'
     $registryCopy = Read-DTestRegistry
     Assert-DTest (
         [int]$registryCopy.registry_rev -eq ([int]$fixture.registry_rev + 1)
@@ -317,12 +328,12 @@ try {
     Assert-DTest (
         $run.Exit -eq 0 -and
         @($run.Result.restored).Count -eq 1 -and
-        @($run.Result.restored) -contains 'claude-opus-5-5' -and
-        (Get-DTestModel 'claude-opus-5-5').status -eq 'active'
+        @($run.Result.restored) -contains $script:targetAgyId -and
+        (Get-DTestModel $script:targetAgyId).status -eq 'active'
     ) 'returning model restores previous status'
     $state = Read-DTestState
     Assert-DTest (
-        $state.sources.agy.missing_counts.'claude-opus-5-5' -eq 0 -and
+        (Get-OrchestraProperty $state.sources.agy.missing_counts $script:targetAgyId) -eq 0 -and
         $state.sources.agy.consecutive_failures -eq 0
     ) 'successful presence resets missing and failure counters'
     $registryCopy = Read-DTestRegistry
@@ -332,7 +343,7 @@ try {
 
     $unaffectedModelsPreserved = $true
     foreach ($originalModel in @($fixture.models)) {
-        if ($originalModel.id -eq 'claude-opus-5-5') { continue }
+        if ($originalModel.id -eq $script:targetAgyId) { continue }
         $currentModel = Get-DTestModel ([string]$originalModel.id)
         if ($currentModel.status -ne $originalModel.status) {
             $unaffectedModelsPreserved = $false
@@ -366,8 +377,8 @@ try {
     Assert-DTest (
         $run.Exit -eq 3 -and @($run.Result.source_errors).Count -eq 1 -and
         $run.Result.source_errors[0].source -eq 'codex' -and
-        @($run.Result.removed) -notcontains 'gpt-6-astra' -and
-        (Get-DTestModel 'gpt-6-astra').status -eq 'active'
+        @($run.Result.removed) -notcontains $script:targetCodexId -and
+        (Get-DTestModel $script:targetCodexId).status -eq 'active'
     ) 'invalid Codex source cannot remove Codex models'
 
     Write-DText $script:codexFixture $codexText
@@ -416,7 +427,7 @@ try {
         $stateAfterTimeout.sources.agy.consecutive_failures -eq 1 -and
         (@($stateAfterTimeout.sources.agy.raw_slugs) -join '|') -ceq
             $rawBeforeTimeout -and
-        (Get-DTestModel 'claude-opus-5-5').status -eq 'active'
+        (Get-DTestModel $script:targetAgyId).status -eq 'active'
     ) 'Timeout preserves agy raw slugs and availability while Codex succeeds'
 
     $env:MODEL_ORCHESTRA_NOW = '2026-11-11T15:03:00Z'

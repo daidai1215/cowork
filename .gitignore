@@ -3,6 +3,9 @@
 *.tmp
 *.bak
 
+# Local probe evaluation outputs
+evals/results/
+
 # OS metadata
 .DS_Store
 Thumbs.db

@@ -160,7 +160,13 @@
     "redo_window_days": 30,
     "redo_min_samples": 3,
     "redo_penalty_scale": 3.0,
-    "escalate_after_failures": 2
+    "escalate_after_failures": 2,
+    "default_effort": "high",
+    "usage_compact_bytes": 2097152,
+    "usage_retain_days": 90,
+    "history_keep_count": 30,
+    "telemetry_min_samples": 5,
+    "telemetry_bad_rate_threshold": 0.4
   },
   "models": [
     {
