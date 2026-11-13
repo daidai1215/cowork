@@ -1,16 +1,16 @@
 # cowork
 
-多模型协同总调度 Skill（面向 **Antigravity (`agy`)** 与 **OpenAI Codex CLI (`codex`)** 双端共享），结合各家旗舰模型的强弱项、额度稀缺度、响应速度与线上口碑进行任务路由、流水线互审、审美把关（Aesthetic Gate）、真伪双查（Truth Gate）以及新模型自动发现与分级入档。
+多模型协同总调度 Skill（面向 **Antigravity (`agy`)** 与 **OpenAI Codex CLI (`codex`)** 双端共享）。以**极致性能（`peak` 模式零额度扣分）**为第一目标，融合 Antigravity **Orchestrator / Swarm** 的闭环控制机制（**规划期只读勘察契约 `plan_contract.md`、`Re-plan if` 硬熔断回交、无冲突分片并行、独立实跑验证员 Active Verifier、异构双旗舰竞标合成 Best-of-2**），同时严格保护 **Claude Opus 5.5（`primary_disabled=true`，仅做审美把关与精简终裁）**。
 
-## 当前主力阵容（默认全开 `high` 档）
+## 当前主力阵容（默认 `peak` 模式，`high` / 攻坚自动 `xhigh`）
 
 <!-- AUTO:ROSTER:START -->
-> 自动同步自 `registry/models.json` (`registry_rev: 3`, 活跃模型: 3)
+> 自动同步自 `registry/models.json` (`registry_rev: 4`, 活跃模型: 3)
 
 | 模型 | ID / 通道 | 默认档位 | 顶级长板（>=9） | 额度 (`quota_rank`) | 速度 (`speed_rank`) | 运行特性 |
 |---|---|---|---|---|---|---|
-| **GPT-6 Astra** | `gpt-6-astra` (`codex`) | `high` | backend (10), code_rigor (10), image_gen (10), math (10), agentic_coding (9.5), office_docs (9), world_knowledge (9) | 2 (中等) | 1 (较慢) | Cockpit 自动切号自愈; tools: `image_gen`, `office_plugins`, `latex`, `browser`, `computer_use` |
-| **Claude Opus 5.5** | `claude-opus-5-5` (`agy`) | `high` | frontend_aesthetic (10), agentic_coding (9.5) | 1 (稀缺) | 2 (居中) | tools: `web_search`, `browser` |
+| **GPT-6 Astra** | `gpt-6-astra` (`codex`) | `high` (攻坚 `xhigh`) | backend (10), code_rigor (10), image_gen (10), math (10), agentic_coding (9.5), office_docs (9), world_knowledge (9) | 2 (中等) | 1 (较慢) | Cockpit 自动切号自愈; tools: `image_gen`, `office_plugins`, `latex`, `browser`, `computer_use` |
+| **Claude Opus 5.5** | `claude-opus-5-5` (`agy`) | `high` | frontend_aesthetic (10), agentic_coding (9.5) | 1 (稀缺) | 2 (居中) | 仅审查/把关（禁主写）; tools: `web_search`, `browser` |
 | **Gemini 4 Carbon** | `gemini-4-carbon` (`agy`) | `high` | long_context (10), prose (10), world_knowledge (10), agentic_coding (9) | 3 (充裕) | 3 (最快) | tools: `web_search`, `browser`, `long_context_1m` |
 
 - **可用额度排序（低 → 高）**: Claude Opus 5.5 (`claude-opus-5-5`) < GPT-6 Astra (`gpt-6-astra`) < Gemini 4 Carbon (`gemini-4-carbon`)
@@ -21,12 +21,14 @@
 
 <!-- AUTO:ROUTING:START -->
 - **标准能力别名**: `best-aesthetic` -> `claude-opus-5-5`, `best-image` -> `gpt-6-astra`, `best-knowledge` -> `gemini-4-carbon`, `best-math` -> `gpt-6-astra`, `best-prose` -> `gemini-4-carbon`, `best-rigor` -> `gpt-6-astra`
+- **默认路由模式**: `peak` (零额度/速度扣分，纯能力上限优先)
 
 | 典型场景 | 标签 (`-Tags`) | 主执行 (`primary`) | 审查 (`reviewer`) | 润色 (`polisher`) | 协作模式 (`pattern`) |
 |---|---|---|---|---|---|
 | 前端页面 / 落地页 | `frontend,landing_page` | `gemini-4-carbon` | `claude-opus-5-5` | - | `aesthetic_gate` |
-| 后端 / API / 并发 | `backend,concurrency` | `gpt-6-astra` | `gemini-4-carbon` | - | `pipelined_review` |
-| 数学推导 / 算法 | `math,algorithm` | `gpt-6-astra` | `gemini-4-carbon` | - | `pipelined_review` |
+| 后端 / API / 并发 | `backend,concurrency` | `gpt-6-astra` (`xhigh`) | `gemini-4-carbon` | - | `pipelined_review` |
+| 数学推导 / 算法 | `math,algorithm` | `gpt-6-astra` (`xhigh`) | `gemini-4-carbon` | - | `pipelined_review` |
+| 疑难 Bug / 根因定位 | `bugfix` | `gpt-6-astra` (`xhigh`) | `gemini-4-carbon` | - | `pipelined_review` |
 | 论文 / 长文 / 文案 | `prose,paper` | `gemini-4-carbon` | `gpt-6-astra` | - | `pipelined_review` |
 | 配图 / 插画 / Mockup | `image_gen` | `gpt-6-astra` | `claude-opus-5-5` | - | `strength_delegation` |
 | PPT / Word / Excel | `office,ppt` | `gpt-6-astra` | `claude-opus-5-5` | - | `strength_delegation` |
@@ -47,11 +49,11 @@ cowork/
 │   └── proposals/                    # 待人工确认的调分/别名/下架提案（跨源按字段路径去重）
 ├── references/
 │   ├── model-profiles.md             # 各主力模型优缺点与避坑指南
-│   ├── collaboration-patterns.md     # 5 种协作模式（含原 gpt-write / gpt-review）与提示词模板
+│   ├── collaboration-patterns.md     # 6 种协作模式（含只读契约、Re-plan if 熔断、分片并行、双旗舰竞标）与模板
 │   └── research-protocol.md          # 新模型自动调研与异构交叉核验协议
 ├── scripts/
-│   ├── route.ps1                     # 按标签与模式（balanced/quality/economy/fast）自动派工
-│   ├── invoke-model.ps1              # 统一跨通道调用入口（含 Cockpit 自动切号等待、指纹校验与重试）
+│   ├── route.ps1                     # 按标签与模式（默认 peak 零税冲上限，支持自动升 xhigh 与双旗舰竞标）自动派工
+│   ├── invoke-model.ps1              # 统一跨通道调用入口（含自动升档、Re-plan 熔断检测、Cockpit 自动切号等待与重试）
 │   ├── detect-models.ps1             # 自动扫描 agy 与 Codex 目录发现新模型 / 离线模型
 │   ├── research-prompt.ps1           # 生成新模型联网调研提示词（带防并发租约）
 │   ├── apply-research.ps1            # 分级应用调研结果、生成提案与回滚档案
@@ -61,7 +63,7 @@ cowork/
 │   ├── sync-docs.ps1                 # 从 models.json 自动渲染受管文档区块与防漂移校验（-Check）
 │   ├── doctor.ps1                    # 环境自检、Junction 自愈与新版 Codex shell 能力探测
 │   ├── maintain.ps1                  # 一键自我维护与自我升级编排器（含 selftest 门禁回滚与安全 Git 提交）
-│   ├── extract-files.ps1             # 安全落盘文本交付代码块（路径白名单 + 防目录穿越/Junction）
+│   ├── extract-files.ps1             # 双遍原子落盘（Re-plan 硬熔断拦截 + Allowed/Forbidden 分片白黑名单 + 防穿越/Junction）
 │   ├── sync-to-codex.ps1             # 创建 ~/.codex/skills/cowork Junction 实现双端同源
 │   ├── selftest.ps1                  # 全量静态检查 + 文档防漂移门禁 + 6 套离线回归测试套件
 │   └── lib/                          # 公共底层库（文件锁、原子写入、账本幂等归档、SHA-256 凭证指纹、Cockpit 等待）

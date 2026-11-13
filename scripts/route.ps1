@@ -10,7 +10,7 @@ Writes one JSON object without changing registry or state.
 [CmdletBinding()]
 param(
     [string[]]$Tags = @(),
-    [string]$Mode = 'balanced',
+    [string]$Mode = '',
     [string[]]$Exclude = @(),
     [switch]$AllowEscalation,
     [string]$RegistryPath,
@@ -168,6 +168,40 @@ function Select-RPolisher {
     return $null
 }
 
+function Resolve-REffort {
+    param(
+        $Model,
+        [string]$ModeName,
+        [string[]]$TagList,
+        [bool]$Escalated,
+        $Policy,
+        [bool]$AllowBoost
+    )
+    if ($null -eq $Model) { return $null }
+    $invokeObj = Get-RValue $Model 'invoke'
+    $fallbackEffort = [string](Get-RValue $Policy 'default_effort' 'high')
+    $baseEffort = [string](Get-RValue $invokeObj 'default_effort' $fallbackEffort)
+    if (-not $AllowBoost) { return $baseEffort }
+
+    $peakEffort = [string](Get-RValue $invokeObj 'peak_effort' '')
+    if ([string]::IsNullOrWhiteSpace($peakEffort)) { return $baseEffort }
+    $supported = @(
+        Get-RValue $invokeObj 'efforts' @() | ForEach-Object { [string]$_ }
+    )
+    if ($supported -notcontains $peakEffort) { return $baseEffort }
+
+    $peakTags = @(
+        Get-RValue $Policy 'peak_effort_tags' @() | ForEach-Object { [string]$_ }
+    )
+    $hitsPeakTag = (
+        @($TagList | Where-Object { $peakTags -contains $_ }).Count -gt 0
+    )
+    if ($Escalated -or ($ModeName -eq 'peak' -and $hitsPeakTag)) {
+        return $peakEffort
+    }
+    return $baseEffort
+}
+
 try {
     $paths = Get-OrchestraPaths `
         -RegistryPath $RegistryPath -StateDir $StateDir
@@ -196,7 +230,24 @@ try {
         }
     }
 
-    $modeConfig = Get-RValue (Get-RValue $registry 'modes') $Mode
+    $policy = Get-RValue $registry 'policy'
+    $modesTable = Get-RValue $registry 'modes'
+    if ([string]::IsNullOrWhiteSpace($Mode)) {
+        $configuredMode = [string](Get-RValue $policy 'default_mode' '')
+        if (
+            -not [string]::IsNullOrWhiteSpace($configuredMode) -and
+            $null -ne (Get-RValue $modesTable $configuredMode)
+        ) {
+            $Mode = $configuredMode
+        }
+        elseif ($null -ne (Get-RValue $modesTable 'peak')) {
+            $Mode = 'peak'
+        }
+        else {
+            $Mode = 'balanced'
+        }
+    }
+    $modeConfig = Get-RValue $modesTable $Mode
     if ($null -eq $modeConfig) {
         throw "ORCHESTRA_ARGS: Unknown mode: $Mode"
     }
@@ -222,7 +273,6 @@ try {
         }
     ) | Sort-Object -Unique
 
-    $policy = Get-RValue $registry 'policy'
     $windowDays = [int](Get-RValue $policy 'redo_window_days' 30)
     $events = @()
     if (Test-Path -LiteralPath $paths.Usage -PathType Leaf) {
@@ -385,6 +435,11 @@ try {
             if ($record.Id -eq $reservedReviewer) {
                 [void]$rejections.Add('reserved as aesthetic reviewer')
             }
+            if ([bool](Get-RValue $model 'primary_disabled' $false)) {
+                [void]$rejections.Add(
+                    'reserved for review/arbitration (primary_disabled)'
+                )
+            }
 
             foreach ($tag in $tagNames) {
                 $tagConfig = Get-RValue $tagTable $tag
@@ -457,13 +512,16 @@ try {
         tags = @($tagNames)
         mode = $Mode
         primary = $null
+        primary_effort = $null
         reviewer = $null
+        reviewer_effort = $null
         polisher = $null
         fallback = @()
         escalate_to = $null
         pattern = 'solo'
         self_review = $false
         blocked = $false
+        orchestration = $null
         scores = $scoreMap
         applied_rules = @($applied.ToArray())
         reasons = @()
@@ -621,8 +679,54 @@ try {
         }
     }
 
+    $result.primary_effort = Resolve-REffort `
+        -Model $primary -ModeName $Mode -TagList @($tagNames) `
+        -Escalated ([bool]$AllowEscalation) -Policy $policy -AllowBoost $true
+    if ($null -ne $reviewer) {
+        $result.reviewer_effort = Resolve-REffort `
+            -Model $reviewer -ModeName $Mode -TagList @($tagNames) `
+            -Escalated $false -Policy $policy -AllowBoost $false
+    }
+
+    $dualTags = @(
+        Get-RValue $policy 'dual_draft_tags' @() | ForEach-Object { [string]$_ }
+    )
+    $hitsDualTag = (
+        @($tagNames | Where-Object { $dualTags -contains $_ }).Count -gt 0
+    )
+    $coDrafterId = $null
+    $coDrafterEffort = $null
+    if ($Mode -eq 'peak' -and $hitsDualTag) {
+        $coCandidates = @(
+            $activeRecords | Where-Object {
+                $_.Id -ne $primary.id -and
+                $_.Model.vendor -ne $primary.vendor -and
+                -not [bool](Get-RValue $_.Model 'primary_disabled' $false)
+            } | Sort-Object `
+                @{ Expression = { $_.Score }; Descending = $true },
+                @{ Expression = { $_.Cap }; Descending = $true },
+                @{ Expression = { $_.Id }; Descending = $false }
+        )
+        if ($coCandidates.Count -gt 0) {
+            $coModel = $coCandidates[0].Model
+            $coDrafterId = [string]$coModel.id
+            $coDrafterEffort = Resolve-REffort `
+                -Model $coModel -ModeName $Mode -TagList @($tagNames) `
+                -Escalated $false -Policy $policy -AllowBoost $true
+        }
+    }
+    $result.orchestration = [ordered]@{
+        recon_gate = 'read_only_required'
+        handoff_contract = 'plan_contract.md'
+        replan_circuit_breaker = $true
+        active_verifier = ($null -ne $reviewer)
+        dual_draft_eligible = ($null -ne $coDrafterId)
+        co_drafter = $coDrafterId
+        co_drafter_effort = $coDrafterEffort
+    }
+
     [void]$reasons.Add(
-        "Selected $($primary.id) with score $($primaryPool[0].Score)."
+        "Selected $($primary.id) ($($result.primary_effort)) with score $($primaryPool[0].Score)."
     )
     if ($result.self_review) {
         [void]$reasons.Add(

@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [switch]$Force,
     [string]$AgyListFile,
@@ -157,6 +157,17 @@ function Get-DSourceData {
     }
     if ([string]::IsNullOrWhiteSpace($CodexFile)) {
         $CodexFile = Join-Path $HOME '.codex\cockpit-model-catalog.json'
+        if (-not [IO.File]::Exists($CodexFile)) {
+            foreach ($altCatalog in @(
+                (Join-Path $HOME '.codex\models_cache.json'),
+                (Join-Path $HOME '.codex\cockpit-model-catalog.json.bak')
+            )) {
+                if ([IO.File]::Exists($altCatalog)) {
+                    $CodexFile = $altCatalog
+                    break
+                }
+            }
+        }
     }
     $content = Get-Content -LiteralPath $CodexFile -Raw -Encoding UTF8
     $rawSlugs = @(Get-DCodexSlugs -Text $content)

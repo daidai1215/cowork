@@ -556,6 +556,56 @@ try {
             $run.Exit -eq 0 -and $null -ne $run.Result.primary -and
             $null -eq $run.Result.reviewer -and $null -eq $run.Result.polisher
         ) 'candidate primary is allowed while candidate review roles remain empty'
+
+        # 8. Peak mode (zero quota/speed tax), auto xhigh effort boost, primary_disabled guard, and dual-draft metadata
+        Set-RTestExhaustion
+        $peakRegistry = Copy-RTestFixture $synBase
+        $modesObj = Get-OrchestraProperty $peakRegistry 'modes'
+        Set-OrchestraProperty $modesObj 'peak' ([pscustomobject]@{ lambda_q = 0.0; lambda_s = 0.0 })
+        $polObj = Get-OrchestraProperty $peakRegistry 'policy'
+        Set-OrchestraProperty $polObj 'default_mode' 'peak'
+        Set-OrchestraProperty $polObj 'peak_effort_tags' @('math', 'concurrency', 'algorithm', 'bugfix')
+        Set-OrchestraProperty $polObj 'dual_draft_tags' @('algorithm', 'concurrency', 'bugfix', 'math')
+        $rigorModel = Get-RTestModel $peakRegistry 'syn-rigor'
+        Set-OrchestraProperty $rigorModel.invoke 'efforts' @('low', 'medium', 'high', 'xhigh')
+        Set-OrchestraProperty $rigorModel.invoke 'peak_effort' 'xhigh'
+        $aesModel = Get-RTestModel $peakRegistry 'syn-aesthetic'
+        Set-OrchestraProperty $aesModel 'primary_disabled' $true
+        Save-RTestFixture $peakRegistry
+
+        $defaultModeExec = Invoke-OrchestraProcess -FilePath $engine -Arguments @(
+            '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+            '-File', (Join-Path $root 'scripts\route.ps1'),
+            '-RegistryPath', $script:routePaths.Registry,
+            '-StateDir', $script:routePaths.StateDir,
+            '-Tags', 'bugfix'
+        ) -WorkDir $temp -TimeoutSec 60 -CaptureStdout
+        $defaultOutLines = @($defaultModeExec.stdout | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $defaultPeakRes = [string]$defaultOutLines[0] | ConvertFrom-Json
+        Assert-RTest (
+            $defaultModeExec.exit_code -eq 0 -and
+            $defaultPeakRes.mode -eq 'peak' -and
+            $defaultPeakRes.primary -eq 'syn-rigor' -and
+            $defaultPeakRes.primary_effort -eq 'xhigh' -and
+            $defaultPeakRes.orchestration.replan_circuit_breaker -eq $true -and
+            $defaultPeakRes.orchestration.dual_draft_eligible -eq $true -and
+            $defaultPeakRes.orchestration.co_drafter -eq 'syn-prose'
+        ) 'default peak mode selects highest raw cap with xhigh boost and co_drafter on bugfix'
+
+        $balancedBugfix = Invoke-RTest 'bugfix' -ModeName 'balanced'
+        Assert-RTest (
+            $balancedBugfix.Exit -eq 0 -and
+            $balancedBugfix.Result.primary -eq 'syn-prose' -and
+            $balancedBugfix.Result.primary_effort -eq 'high'
+        ) 'legacy balanced mode retains quota/speed penalty behavior'
+
+        Set-RTestExhaustion @('syn-rigor')
+        $opusGuardRun = Invoke-RTest 'bugfix' -ModeName 'peak'
+        Assert-RTest (
+            $opusGuardRun.Exit -eq 0 -and
+            $opusGuardRun.Result.primary -eq 'syn-prose' -and
+            @($opusGuardRun.Result.fallback) -notcontains 'syn-aesthetic'
+        ) 'primary_disabled prevents aesthetic model from becoming primary even when rigor is exhausted'
     }
     finally {
         Save-RTestFixture $fixture

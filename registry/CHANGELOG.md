@@ -1,5 +1,13 @@
 # Cowork changelog
 
+## 2026-11-13T01:05:00.0000000Z - Performance-first orchestration upgrade (Orchestrator principles)
+- registry_rev: 3 -> 4
+- added mode `peak` (`lambda_q=0.0, lambda_s=0.0`) as `policy.default_mode`
+- configured `gpt-6-astra` `invoke.peak_effort="xhigh"` for `math`, `concurrency`, `algorithm`, `bugfix`, and escalation
+- locked `claude-opus-5-5` `primary_disabled=true` (strictly reserved for Aesthetic Gate, review, and compact arbitration)
+- configured `policy.dual_draft_tags` for heterogeneous Best-of-2 competitive synthesis
+- backup: registry/history/models-20261113-090500-3-perf.json
+
 ## 2026-11-10T19:47:00.0000000Z - Roster update: 3-flagship high lineup & Cockpit rotation
 - registry_rev: 2 -> 3
 - active models: gpt-6-astra (high, account_rotation=true), claude-opus-5-5 (high), gemini-4-carbon (high, promoted to active)

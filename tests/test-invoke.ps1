@@ -959,6 +959,107 @@ exit 0
             (Join-Path ([IO.Path]::GetDirectoryName($fixtureRegistry)) 'history')
         ) -and [IO.Directory]::Exists((Join-Path $fixtureState 'locks'))
     )
+
+    # Peak effort auto-boost, Re-plan circuit breaker, and atomic extract-files tests
+    $peakReg = Read-JsonFile -Path $fixtureRegistry
+    $peakPol = Get-OrchestraProperty $peakReg 'policy'
+    Set-OrchestraProperty $peakPol 'peak_effort_tags' @('math', 'concurrency', 'algorithm', 'bugfix')
+    $astraFixture = @($peakReg.models | Where-Object { $_.id -eq 'gpt-6-astra' })[0]
+    Set-OrchestraProperty $astraFixture.invoke 'peak_effort' 'xhigh'
+    Write-JsonAtomic -Path $fixtureRegistry -Object $peakReg
+
+    $boostRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gpt-6-astra', '-Tags', 'math,algorithm', '-Prompt', 'TEST', '-DryRun')
+    )
+    Assert-Test 'Peak tag auto-boosts Astra effort to xhigh when -Effort omitted' (
+        $boostRun.code -eq 0 -and $boostRun.json.effort -eq 'xhigh' -and
+        @($boostRun.json.arguments) -contains 'model_reasoning_effort="xhigh"'
+    )
+    $nonPeakRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gpt-6-astra', '-Tags', 'prose', '-Prompt', 'TEST', '-DryRun')
+    )
+    Assert-Test 'Non-peak tag preserves default high effort' (
+        $nonPeakRun.code -eq 0 -and $nonPeakRun.json.effort -eq 'high'
+    )
+
+    # Clear exhaustion state before testing live agy fake wrapper replan signal
+    Invoke-WithLock -Paths $script:TestPaths -Name state -ScriptBlock {
+        $stClean = Read-State -Paths $script:TestPaths
+        Set-OrchestraProperty $stClean 'exhausted' ([pscustomobject]@{})
+        Save-State -Paths $script:TestPaths -State $stClean
+    }
+    $replanPrompt = "=====ORCHESTRA_REPLAN_REQUIRED=====`ntrigger: signature mismatch`nevidence: expected foo(a,b), found foo(a)`n=====END ORCHESTRA_REPLAN_REQUIRED====="
+    $replanRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gemini-4-carbon', '-Prompt', $replanPrompt)
+    )
+    Assert-Test 'Invoke detects ORCHESTRA_REPLAN_REQUIRED circuit breaker cleanly' (
+        $replanRun.code -eq 0 -and
+        $replanRun.json.replan_required -eq $true -and
+        $replanRun.json.replan_detail -match 'signature mismatch'
+    )
+
+    $extractScript = Join-Path $root 'scripts\extract-files.ps1'
+    $extractRoot = Join-Path $sandbox 'extract-root'
+    [void][IO.Directory]::CreateDirectory($extractRoot)
+
+    $replanPayloadPath = Join-Path $sandbox 'replan-out.md'
+    $replanPayload = @(
+        '=====FILE: src/auth/ok.txt====='
+        'should not write'
+        '=====END FILE====='
+        '=====ORCHESTRA_REPLAN_REQUIRED====='
+        'trigger: contract invalid'
+        '=====END ORCHESTRA_REPLAN_REQUIRED====='
+    ) -join "`r`n"
+    [IO.File]::WriteAllText($replanPayloadPath, $replanPayload, $script:OrchestraUtf8)
+    $extReplan = Invoke-OrchestraProcess -FilePath $script:TestHost -Arguments @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $extractScript,
+        '-InputFile', $replanPayloadPath, '-Root', $extractRoot, '-AllowedPrefixes', 'src/auth/'
+    ) -WorkDir $sandbox -TimeoutSec 30 -CaptureStdout
+    Assert-Test 'extract-files blocks writes with exit 3 on replan signal' (
+        $extReplan.exit_code -eq 3 -and
+        -not [IO.File]::Exists((Join-Path $extractRoot 'src\auth\ok.txt'))
+    )
+
+    $atomicPayloadPath = Join-Path $sandbox 'atomic-violation.md'
+    $atomicPayload = @(
+        '=====FILE: src/auth/allowed.txt====='
+        'valid shard file'
+        '=====END FILE====='
+        '=====FILE: src/auth/secret/blocked.txt====='
+        'touches forbidden prefix'
+        '=====END FILE====='
+    ) -join "`r`n"
+    [IO.File]::WriteAllText($atomicPayloadPath, $atomicPayload, $script:OrchestraUtf8)
+    $extAtomic = Invoke-OrchestraProcess -FilePath $script:TestHost -Arguments @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $extractScript,
+        '-InputFile', $atomicPayloadPath, '-Root', $extractRoot,
+        '-AllowedPrefixes', 'src/auth/', '-ForbiddenPrefixes', 'src/auth/secret/'
+    ) -WorkDir $sandbox -TimeoutSec 30 -CaptureStdout
+    Assert-Test 'extract-files enforces all-or-nothing shard rollback on ForbiddenPrefixes' (
+        $extAtomic.exit_code -eq 2 -and
+        -not [IO.File]::Exists((Join-Path $extractRoot 'src\auth\allowed.txt')) -and
+        -not [IO.File]::Exists((Join-Path $extractRoot 'src\auth\secret\blocked.txt'))
+    )
+
+    $cleanPayloadPath = Join-Path $sandbox 'clean-shard.md'
+    $cleanPayload = @(
+        '=====FILE: src/auth/allowed.txt====='
+        'clean shard content'
+        '=====END FILE====='
+        '=====NOTES====='
+        'shard ok'
+    ) -join "`r`n"
+    [IO.File]::WriteAllText($cleanPayloadPath, $cleanPayload, $script:OrchestraUtf8)
+    $extClean = Invoke-OrchestraProcess -FilePath $script:TestHost -Arguments @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $extractScript,
+        '-InputFile', $cleanPayloadPath, '-Root', $extractRoot,
+        '-AllowedPrefixes', 'src/auth/', '-ForbiddenPrefixes', 'src/auth/secret/'
+    ) -WorkDir $sandbox -TimeoutSec 30 -CaptureStdout
+    Assert-Test 'extract-files writes valid shard files cleanly' (
+        $extClean.exit_code -eq 0 -and
+        [IO.File]::Exists((Join-Path $extractRoot 'src\auth\allowed.txt'))
+    )
 }
 catch {
     $script:Failed++

@@ -24,10 +24,27 @@ function New-InvocationCapture {
     return @{
         session_id = $null; quota = $false; model_error = $false
         failed = $false; saw_completion = $false; agy_response = $null
+        codex_messages = New-Object 'System.Collections.Generic.List[string]'
         timeout = $false; truncated = $false
         auth_interrupted = $false; resume_incompatible = $false
         agy_not_logged_in = $false
         diagnostics = New-Object 'System.Collections.Generic.List[string]'
+    }
+}
+
+function Get-ReplanCircuitBreaker {
+    param([AllowEmptyString()][string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return @{ triggered = $false; detail = $null }
+    }
+    $pattern = '(?ms)^=====ORCHESTRA_REPLAN_REQUIRED=====\s*\r?\n(?<body>.*?)\r?\n=====END ORCHESTRA_REPLAN_REQUIRED=====\s*$'
+    $match = [regex]::Match($Text, $pattern)
+    if (-not $match.Success) {
+        return @{ triggered = $false; detail = $null }
+    }
+    return @{
+        triggered = $true
+        detail = $match.Groups['body'].Value.Trim()
     }
 }
 
@@ -63,6 +80,8 @@ $invoke = $null
 $attempts = 1
 $accountSwitched = $false
 $resumeInvalidated = $false
+$replanRequired = $false
+$replanDetail = $null
 $rotationEnabled = $false
 $rotationWaitMs = 0
 $maxRetries = 0
@@ -141,12 +160,38 @@ try {
         }
     }
 
+    $Tags = @(
+        foreach ($rawTag in @($Tags)) {
+            foreach ($part in ([string]$rawTag -split ',')) {
+                $trimmed = $part.Trim()
+                if ($trimmed.Length -gt 0) { $trimmed }
+            }
+        }
+    )
     $invoke = Get-OrchestraProperty $modelObject 'invoke'
+    $supportedEfforts = @(
+        Get-OrchestraArray $invoke 'efforts' | ForEach-Object { [string]$_ }
+    )
     if ([string]::IsNullOrWhiteSpace($Effort)) {
         $Effort = [string](Get-OrchestraProperty $invoke 'default_effort')
+        if (-not $adHoc -and $null -ne $policy -and $Tags.Count -gt 0) {
+            $peakEffort = [string](Get-OrchestraProperty $invoke 'peak_effort' '')
+            $peakTags = @(
+                Get-OrchestraArray $policy 'peak_effort_tags' |
+                    ForEach-Object { [string]$_ }
+            )
+            $hitsPeak = (
+                @($Tags | Where-Object { $peakTags -contains $_ }).Count -gt 0
+            )
+            if (
+                -not [string]::IsNullOrWhiteSpace($peakEffort) -and
+                $hitsPeak -and
+                ($supportedEfforts -contains $peakEffort)
+            ) {
+                $Effort = $peakEffort
+            }
+        }
     }
-    $supportedEfforts = Get-OrchestraProperty $invoke 'efforts' @()
-    $supportedEfforts = @($supportedEfforts)
     if ($Effort -notin @('low', 'medium', 'high', 'xhigh', 'max') -or
         $Effort -notin $supportedEfforts) {
         throw "ORCHESTRA_ARGS: Unsupported effort for $modelId."
@@ -311,6 +356,18 @@ try {
                     $session = [string](Get-OrchestraProperty $eventObject 'thread_id')
                     if (-not [string]::IsNullOrWhiteSpace($session)) {
                         $capture.session_id = $session
+                    }
+                }
+                if ($type -eq 'item.completed') {
+                    $itemObj = Get-OrchestraProperty $eventObject 'item'
+                    if (
+                        $null -ne $itemObj -and
+                        [string](Get-OrchestraProperty $itemObj 'type') -eq 'agent_message'
+                    ) {
+                        $msgText = [string](Get-OrchestraProperty $itemObj 'text' '')
+                        if (-not [string]::IsNullOrWhiteSpace($msgText)) {
+                            [void]$capture.codex_messages.Add($msgText)
+                        }
                     }
                 }
                 if ($type -eq 'turn.completed') { $capture.saw_completion = $true }
@@ -553,6 +610,30 @@ try {
                 $outputPath, [string]$responseText, $script:OrchestraUtf8
             )
         }
+        if ($exitCode -eq 0) {
+            $inspectText = ''
+            if ($channel -eq 'agy' -and $null -ne $capture.agy_response) {
+                $inspectText = if ($capture.agy_response -is [string]) {
+                    $capture.agy_response
+                }
+                else {
+                    ConvertTo-Json -InputObject $capture.agy_response -Depth 32
+                }
+            }
+            elseif ($channel -eq 'codex') {
+                if ($capture.codex_messages.Count -gt 0) {
+                    $inspectText = ($capture.codex_messages.ToArray() -join "`n")
+                }
+                elseif ($null -ne $outputPath -and [IO.File]::Exists($outputPath)) {
+                    $inspectText = [IO.File]::ReadAllText($outputPath, $script:OrchestraUtf8)
+                }
+            }
+            $replanCheck = Get-ReplanCircuitBreaker -Text $inspectText
+            if ($replanCheck.triggered) {
+                $replanRequired = $true
+                $replanDetail = $replanCheck.detail
+            }
+        }
     }
 }
 catch {
@@ -578,12 +659,14 @@ if (-not $DryRun -and $null -ne $paths -and $null -ne $modelObject) {
         Add-UsageEvent -Paths $paths -Event @{
             type = 'invocation'; ad_hoc = $adHoc; invocation_id = $invocationId
             ts = (Get-OrchestraNow).ToString('o')
-            model = $modelId; channel = $channel; tags = @($Tags); access = $Access
+            model = $modelId; channel = $channel; effort = $Effort
+            tags = @($Tags); access = $Access
             duration_sec = $duration; exit = $exitCode
             quota_error = [bool]$capture.quota; session_id = $capture.session_id
             attempts = [int]$attempts
             account_switched = [bool]$accountSwitched
             resume_invalidated = [bool]$resumeInvalidated
+            replan_required = [bool]$replanRequired
         }
     }
     catch {
@@ -594,7 +677,8 @@ if (-not $DryRun -and $null -ne $paths -and $null -ne $modelObject) {
 }
 $finalResult = @{
     orchestra_result = $true; invocation_id = $invocationId
-    model = $modelId; channel = $channel; session_id = $capture.session_id
+    model = $modelId; channel = $channel; effort = $Effort
+    session_id = $capture.session_id
     exit = $exitCode; duration_sec = $duration; out_file = $outputPath
     quota_error = [bool]$capture.quota; timeout = [bool]$capture.timeout
     truncated = [bool]$capture.truncated; ad_hoc = $adHoc
@@ -602,6 +686,8 @@ $finalResult = @{
     attempts = [int]$attempts
     account_switched = [bool]$accountSwitched
     resume_invalidated = [bool]$resumeInvalidated
+    replan_required = [bool]$replanRequired
+    replan_detail = $replanDetail
 }
 foreach ($key in $dryData.Keys) { $finalResult[$key] = $dryData[$key] }
 Write-OrchestraResult -Object $finalResult

@@ -1,6 +1,6 @@
 ---
 name: cowork
-description: 【多模型协同总调度】在 GPT-6 Astra high（Codex + Cockpit 自动切号）、Gemini 4 Carbon high、Claude Opus 5.5 high（Antigravity/agy）之间，按任务类型、模型强项、额度与速度自动派工、互审与真伪双查；内置 Cockpit 切号中断自愈，自动发现新模型、联网调研并自适应调整策略。已并入原 gpt-write（GPT 执笔）与 gpt-review（GPT 审稿）——提及 cowork、多模型配合、多模型协作、派工、gpt-write、gpt-review、GPT 执笔、GPT 审稿、Opus 把关审美、Gemini 润色时触发。
+description: 【多模型协同总调度·极致性能版】在 GPT-6 Astra（high / 攻坚 xhigh，Codex + Cockpit 自动切号）、Gemini 4 Carbon（high）与 Claude Opus 5.5（high，严格保护仅做审美把关与精简终裁）之间，按纯能力天花板自动派工；融合 Orchestrator 只读勘察契约（plan_contract.md）、Re-plan if 硬熔断、无冲突分片并行、独立实跑验证员（Active Verifier）与异构双旗舰竞标合成（Best-of-2），内置自动发现新模型与自维护——提及 cowork、多模型配合、多模型协作、派工、gpt-write、gpt-review、GPT 执笔、GPT 审稿、Opus 把关审美、Gemini 润色时触发。
 ---
 
 # cowork：多模型协同总调度
@@ -9,12 +9,12 @@ description: 【多模型协同总调度】在 GPT-6 Astra high（Codex + Cockpi
 **运行时状态**：`$HOME\.cowork\`。其中 `state.json` 记录额度状态、基线与扫描时间，`usage.jsonl` 记录调用账本。
 **当前主力阵容与资源排序（由 `scripts/sync-docs.ps1` 自动同步）**：
 <!-- AUTO:ROSTER:START -->
-> 自动同步自 `registry/models.json` (`registry_rev: 3`, 活跃模型: 3)
+> 自动同步自 `registry/models.json` (`registry_rev: 4`, 活跃模型: 3)
 
 | 模型 | ID / 通道 | 默认档位 | 顶级长板（>=9） | 额度 (`quota_rank`) | 速度 (`speed_rank`) | 运行特性 |
 |---|---|---|---|---|---|---|
-| **GPT-6 Astra** | `gpt-6-astra` (`codex`) | `high` | backend (10), code_rigor (10), image_gen (10), math (10), agentic_coding (9.5), office_docs (9), world_knowledge (9) | 2 (中等) | 1 (较慢) | Cockpit 自动切号自愈; tools: `image_gen`, `office_plugins`, `latex`, `browser`, `computer_use` |
-| **Claude Opus 5.5** | `claude-opus-5-5` (`agy`) | `high` | frontend_aesthetic (10), agentic_coding (9.5) | 1 (稀缺) | 2 (居中) | tools: `web_search`, `browser` |
+| **GPT-6 Astra** | `gpt-6-astra` (`codex`) | `high` (攻坚 `xhigh`) | backend (10), code_rigor (10), image_gen (10), math (10), agentic_coding (9.5), office_docs (9), world_knowledge (9) | 2 (中等) | 1 (较慢) | Cockpit 自动切号自愈; tools: `image_gen`, `office_plugins`, `latex`, `browser`, `computer_use` |
+| **Claude Opus 5.5** | `claude-opus-5-5` (`agy`) | `high` | frontend_aesthetic (10), agentic_coding (9.5) | 1 (稀缺) | 2 (居中) | 仅审查/把关（禁主写）; tools: `web_search`, `browser` |
 | **Gemini 4 Carbon** | `gemini-4-carbon` (`agy`) | `high` | long_context (10), prose (10), world_knowledge (10), agentic_coding (9) | 3 (充裕) | 3 (最快) | tools: `web_search`, `browser`, `long_context_1m` |
 
 - **可用额度排序（低 → 高）**: Claude Opus 5.5 (`claude-opus-5-5`) < GPT-6 Astra (`gpt-6-astra`) < Gemini 4 Carbon (`gemini-4-carbon`)
@@ -23,25 +23,25 @@ description: 【多模型协同总调度】在 GPT-6 Astra high（Codex + Cockpi
 
 | 想做什么 | 看哪里 |
 |---|---|
-| 三大主力模型强弱项与口碑档案 | `references/model-profiles.md` |
-| 5 种协作模式与提示词模板（含原 gpt-write / gpt-review 全部规则） | `references/collaboration-patterns.md` |
+| 三大主力模型强弱项与避坑档案 | `references/model-profiles.md` |
+| 6 种协作模式（含只读契约、`Re-plan if` 熔断、分片并行、双旗舰竞标）与模板 | `references/collaboration-patterns.md` |
 | 新模型调研协议 | `references/research-protocol.md` |
 | 机器可读档案（分数、别名、硬规则、策略参数） | `registry/models.json` |
 
 ---
 
-## 第 0 步：确认自己是谁（主控身份）
+## 第 0 步：确认自己是谁（主控身份与极致性能准则）
 
-**当前对话所用模型即主控**，负责决策拍板、结果整合与最终验收。所有模型调用默认统一使用 `high` 档，除非用户显式要求其他档位。
+**当前对话所用模型即主控**，负责只读勘察立项、契约签发、实跑验收与熔断重排。默认路由模式为 **`peak`（零额度/速度扣分，纯冲能力上限）**：常规任务开 `high` 档；命中硬核标签（`math, concurrency, algorithm, bugfix`）或返工升级时，`gpt-6-astra` 自动升至 **`xhigh` 档**。**`claude-opus-5-5` 严格不解禁主写（`primary_disabled=true`）**，仅用于审美把关与精简方案终裁。
 
-| 你在哪 | 你是谁 | 怎么调用 GPT-6 Astra (`high`) | 怎么调用 Carbon / Opus (`high`) |
+| 你在哪 | 你是谁 | 怎么调用 GPT-6 Astra (`high`/`xhigh`) | 怎么调用 Carbon / Opus (`high`) |
 |---|---|---|---|
-| Antigravity，主控为 Gemini 4 Carbon | 起草与长文/检索主力兼主控 | `invoke-model.ps1 -Model gpt-6-astra` | 调用 Opus：`invoke-model.ps1 -Model claude-opus-5-5` |
-| Antigravity，主控为 Claude Opus 5.5 | **惜用模式的主控** | 同上 | 调用 Carbon：`invoke-model.ps1 -Model gemini-4-carbon` |
-| Codex，主控为 GPT-6 Astra | 严谨执行兼主控 | （自身即 Astra） | `invoke-model.ps1 -Model gemini-4-carbon` / `claude-opus-5-5`，**必须申请 `sandbox_permissions="require_escalated"`**，否则会误报 “not logged into Antigravity”；不要给 agy 加 `--sandbox` |
+| Antigravity，主控为 Gemini 4 Carbon | 1M 全局勘察、长文主创兼总控 | `invoke-model.ps1 -Model gpt-6-astra -Tags <tags>` | 审美/终裁调 Opus：`invoke-model.ps1 -Model claude-opus-5-5` |
+| Antigravity，主控为 Claude Opus 5.5 | **惜用模式的总控（禁铺写长代码/长文）** | 同上 | 勘察/起草一律派 Carbon：`invoke-model.ps1 -Model gemini-4-carbon` |
+| Codex，主控为 GPT-6 Astra | 硬核实现与严谨性总控 | （自身即 Astra） | `invoke-model.ps1 -Model gemini-4-carbon` / `claude-opus-5-5`，**必须申请 `sandbox_permissions="require_escalated"`**，否则会误报 “not logged into Antigravity”；不要给 agy 加 `--sandbox` |
 
-- **Opus 任主控时**：整段对话都在消耗最稀缺额度。主控仅做决策拍板与审美把关，大段起草与检索一律派给 Gemini 4 Carbon 或 GPT-6 Astra。
-- **GPT-6 Astra 任主控时**：响应最慢且单账号额度较少，文字定稿、全库通读与检索派给 Gemini 4 Carbon，审美把关派给 Opus 5.5，主控专注核心实现与数学/严谨性把关。
+- **Opus 5.5 严格保护铁律**：Opus 绝不进入 `primary` / `fallback` 主写池。Opus 任主控时仅做立项拍板与审美/架构终裁，全仓检索与大段实现一律派给 Carbon 或 Astra。
+- **GPT-6 Astra 任主控时**：全库 1M 通读、联网检索与文字定稿派给 Gemini 4 Carbon，审美把关派给 Opus 5.5，主控专注核心实现与形式化/严谨性把关。
 
 ### 已知环境限制与 Cockpit 自动切号防护（必读）
 
@@ -81,27 +81,29 @@ detect-models.ps1          # 24 小时内已扫描过会直接返回 {"skipped":
 
 ---
 
-## 第 2 步：派工
+## 第 2 步：派工（默认 `peak` 极致性能路由）
 
-1. 为任务打标签（见 `models.json` 的 `tags`，如 `frontend, landing_page, backend, math, prose, paper, research, image_gen, ppt, refactor`）。
-2. 执行 `route.ps1 -Tags <标签…> [-Mode balanced|quality|economy|fast]`，获取 `primary / reviewer / polisher / fallback / pattern / reasons`。
+1. 为任务打标签（见 `models.json` 的 `tags`，如 `frontend, landing_page, backend, concurrency, bugfix, math, algorithm, prose, paper, research, image_gen, ppt, refactor`）。
+2. 执行 `route.ps1 -Tags <标签…> [-Mode peak|balanced|quality|economy|fast] [-AllowEscalation]`，获取 `primary / primary_effort / reviewer / polisher / fallback / pattern / orchestration`。
 3. 主控可否决 route 的建议，但必须在最终汇报中说明理由。
 
-**硬规则**（route 已内置，主控必须遵守）：
-- 生图仅走 Codex（`gpt-6-astra` `image_gen`）。
-- 前端、UI、落地页走 Aesthetic Gate：Gemini 4 Carbon (`high`) 起草，Opus 5.5 (`high`) 仅审阅多视口截图、design tokens 与关键组件片段（靠精简输入省额度，不降推理档位）；Opus 不可用时由 Carbon 按设计检查清单独立自审。
-- 数学与后端的正确性主写与把关优先走 `best-rigor`（`gpt-6-astra` `high`），由异构厂商模型（`gemini-4-carbon` `high`）复核接口、上下文一致性与实跑验证。
-- 最终文字润色交给 `best-prose`（`gemini-4-carbon` `high`），剔除一切防御性写作表述。
+**硬规则**（`route.ps1` 与 `models.json` 已双锁死，主控必须遵守）：
+- **零额度税冲上限**：默认 `peak` 模式（$\lambda_q=0,\ \lambda_s=0$）下，Astra 与 Carbon 纯按能力分竞争主写；命中 `math / concurrency / algorithm / bugfix` 或带 `-AllowEscalation` 时，Astra 自动拉满至 **`xhigh` 档**。
+- **Opus 5.5 不解禁主写**：`claude-opus-5-5` 已锁定 `primary_disabled=true`，永不承担大段初稿或主写兜底；前端、UI、落地页走 Aesthetic Gate（Carbon `high` 主写，Opus 5.5 `high` 仅审多视口截图、design tokens 与关键组件片段；Opus 不可用时由 Carbon 另开独立会话对照清单自审）。
+- **生图独占**：生图仅走 Codex（`gpt-6-astra` `image_gen`）。
+- **异构复核与去防御性定稿**：数学、后端、疑难 Bug 由 `gpt-6-astra` 主攻、异构厂商 `gemini-4-carbon` 任独立实跑验证员（Active Verifier）；最终文字润色统一交 `best-prose`（`gemini-4-carbon` `high`），剔除一切防御性套话。
 
 **标准别名与常见任务速查**（由 `scripts/sync-docs.ps1` 自动从 `models.json` 与 `route.ps1` 渲染）：
 <!-- AUTO:ROUTING:START -->
 - **标准能力别名**: `best-aesthetic` -> `claude-opus-5-5`, `best-image` -> `gpt-6-astra`, `best-knowledge` -> `gemini-4-carbon`, `best-math` -> `gpt-6-astra`, `best-prose` -> `gemini-4-carbon`, `best-rigor` -> `gpt-6-astra`
+- **默认路由模式**: `peak` (零额度/速度扣分，纯能力上限优先)
 
 | 典型场景 | 标签 (`-Tags`) | 主执行 (`primary`) | 审查 (`reviewer`) | 润色 (`polisher`) | 协作模式 (`pattern`) |
 |---|---|---|---|---|---|
 | 前端页面 / 落地页 | `frontend,landing_page` | `gemini-4-carbon` | `claude-opus-5-5` | - | `aesthetic_gate` |
-| 后端 / API / 并发 | `backend,concurrency` | `gpt-6-astra` | `gemini-4-carbon` | - | `pipelined_review` |
-| 数学推导 / 算法 | `math,algorithm` | `gpt-6-astra` | `gemini-4-carbon` | - | `pipelined_review` |
+| 后端 / API / 并发 | `backend,concurrency` | `gpt-6-astra` (`xhigh`) | `gemini-4-carbon` | - | `pipelined_review` |
+| 数学推导 / 算法 | `math,algorithm` | `gpt-6-astra` (`xhigh`) | `gemini-4-carbon` | - | `pipelined_review` |
+| 疑难 Bug / 根因定位 | `bugfix` | `gpt-6-astra` (`xhigh`) | `gemini-4-carbon` | - | `pipelined_review` |
 | 论文 / 长文 / 文案 | `prose,paper` | `gemini-4-carbon` | `gpt-6-astra` | - | `pipelined_review` |
 | 配图 / 插画 / Mockup | `image_gen` | `gpt-6-astra` | `claude-opus-5-5` | - | `strength_delegation` |
 | PPT / Word / Excel | `office,ppt` | `gpt-6-astra` | `claude-opus-5-5` | - | `strength_delegation` |
@@ -110,34 +112,40 @@ detect-models.ps1          # 24 小时内已扫描过会直接返回 {"skipped":
 
 ---
 
-## 第 3 步：按模式协作
+## 第 3 步：按模式协作（借鉴 Orchestrator 闭环控制）
 
-详细步骤见 `references/collaboration-patterns.md`：
+详细步骤与模板见 `references/collaboration-patterns.md`：
 
-| pattern | 一句话 |
+| pattern / 机制 | 一句话 |
 |---|---|
-| `solo` | 单模型直接执行，主控验收 |
-| `delegate_execute`（原 gpt-write） | 主控与执行者协商（落盘方案） → 主控拍板 → 执行者交付 → 主控独立验收 |
-| `pipelined_review`（原 gpt-review） | 方案预审（落盘共识） → 主控写一块、审查者审上一块 → 完稿汇总终审 → 主控裁决 |
+| **Read-Only Recon Gate**（前置门禁） | 动笔前先 `-Access read` 全局勘察，签发自包含 `<scratch>/plan_contract.md`（含白名单、禁区、验收命令、`Re-plan if`） |
+| **`Re-plan if` 熔断回交**（全模式硬约束） | 执行中一旦触发计划假设失效条件，禁止临场硬凑脏补丁，必须输出 `=====ORCHESTRA_REPLAN_REQUIRED=====` 停手回交（`extract-files.ps1` 硬阻断落盘） |
+| `solo` | 单模型按契约直接执行，主控实跑验收 |
+| `delegate_execute`（契约化委派） | 双旗舰只读立项（落盘 `plan_contract.md`） → 专长旗舰按分片落地 → 主控/异构验证员实跑验收 |
+| `pipelined_review`（流水线并审） | 方案预审（落盘共识） → 分片并行/边写边由异构 Active Verifier 实跑核验 → 完稿汇总终审 → 主控裁决 |
+| `dual_draft_synthesis`（异构双旗舰竞标） | 核心算法/并发/疑难 Bug（`dual_draft_eligible=true`）并行派 `Astra (xhigh)` + `Carbon (high)` 独立出解，实跑基准择优融合（分歧时可交 Opus 精简终裁） |
 | `aesthetic_gate` | Carbon 写前端，Opus 5.5 (`high`) 仅审截图与 tokens，最多 2 轮 |
 | `strength_delegation` | 生图、Office、LaTeX、重度形式推导外包给 GPT-6 Astra，后台并行 |
-| Truth Gate（叠加在任何模式上） | 涉及文献、数据、API、公式真伪时：异构模型交叉查证，主控最后亲自复核 |
+| Truth Gate（真伪双查） | 涉及文献、数据、API、公式真伪时：异构模型交叉查证，主控最后亲自复核 |
 
-**额度与并发铁律**：
-- 三个模型统一保持 `high` 档；Opus 靠“只传截图 + tokens + 关键片段、只审不铺写长文”省额度；Astra 靠“精准派发硬核子任务、不让它写普通长文”减少切号频率。
-- **阶段状态必落盘**：协商方案、预审结论、分块审稿意见一律写入 `<scratch>/*.md`，确保 Cockpit 随时切换 Astra 账号导致旧会话失效时，新会话能直接读取磁盘状态零损续接。
-- GPT-6 Astra 任务委派后一律放入后台运行，主控在同一回合内并行推进其他工作。
+**性能、隔离与并发铁律**：
+- **无冲突分片并行（Disjoint Sharding）**：多模块任务拆为互不重叠的路径分片，每个后台会话绑定独立的 `-AllowedPrefixes` 与 `-ForbiddenPrefixes`；`extract-files.ps1` 执行全或无原子校验（任一文件越界则整批零写入退出 `2`）。
+- **读写职责隔离（Active Verifier）**：审查者绝不直接修改作者文件，但必须通过实跑测试、脚本验算或权威检索给出可证伪结论。
+- **阶段契约必落盘**：`plan_contract.md`、预审结论、分片审稿意见一律写入 `<scratch>/*.md`，确保 Cockpit 随时切换 Astra 账号导致旧会话失效时，新会话读取契约即可零损续接。
+- 后台外部调用一律异步并行推进，主控在同一回合内继续执行无冲突任务。
 
 ---
 
-## 第 4 步：调用外部模型（统一入口）
+## 第 4 步：调用外部模型与原子落盘（统一入口）
 
 ```powershell
-invoke-model.ps1 -Model <id|别名> -Access read|write -PromptFile <f> -WorkDir <d> [-Resume <sid>] [-OutFile <f>] [-Tags …] [-Effort …] [-JsonSchema <f>] [-DryRun]
+invoke-model.ps1 -Model <id|别名> -Access read|write -PromptFile <f> -WorkDir <d> [-Tags <tags>] [-Effort <e>] [-Resume <sid>] [-OutFile <f>] [-JsonSchema <f>] [-DryRun]
+extract-files.ps1 -InputFile <f> -Root <d> -AllowedPrefixes <p1,p2> [-ForbiddenPrefixes <f1,f2>] [-DryRun]
 ```
 
-- 别名：支持 `models.json` 中的全部模型 ID 与 `best-*` 能力别名（见第 2 步自动同步表）。
-- 输出末行为汇总 JSON，包含 `session_id`、`attempts`、`account_switched`、`resume_invalidated`、`quota_error`。
+- 别名与自动升档：支持全部模型 ID 与 `best-*` 能力别名；未显式传 `-Effort` 且 `-Tags` 命中 `peak_effort_tags` 时，自动升至模型的 `peak_effort`（如 Astra 自动升 `xhigh`）。
+- 输出末行为汇总 JSON，包含 `effort`、`session_id`、`attempts`、`account_switched`、`resume_invalidated`、`quota_error`、`replan_required`、`replan_detail`。
+- **熔断拦截**：若 `replan_required=true`（或 `extract-files.ps1` 返回退出码 `3`），严禁强行落盘，主控必须回到只读勘察更新 `plan_contract.md` 后重派。
 - **验收后必做**：执行 `record-outcome.ps1 -SessionId <sid> -Outcome ok|redo|fail`。
 
 ---

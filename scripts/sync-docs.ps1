@@ -33,7 +33,7 @@ function Invoke-CleanRoute {
     $writer = New-Object IO.StringWriter
     [Console]::SetOut($writer)
     try {
-        & $RouteScript -Tags $TagsCsv -Mode 'balanced' -RegistryPath $RegistryFile -StateDir $EmptyStateDir
+        & $RouteScript -Tags $TagsCsv -RegistryPath $RegistryFile -StateDir $EmptyStateDir
     }
     finally {
         [Console]::SetOut($savedOut)
@@ -99,6 +99,13 @@ function Build-RosterBlock {
         $channel = [string](Get-OrchestraProperty $model 'channel')
         $invoke = Get-OrchestraProperty $model 'invoke'
         $effort = [string](Get-OrchestraProperty $invoke 'default_effort' 'high')
+        $peakEffort = [string](Get-OrchestraProperty $invoke 'peak_effort' '')
+        $effortCell = if (-not [string]::IsNullOrWhiteSpace($peakEffort) -and $peakEffort -cne $effort) {
+            ('`{0}` (' + (U '\u653b\u575a') + ' `{1}`)') -f $effort, $peakEffort
+        }
+        else {
+            '`{0}`' -f $effort
+        }
         $qRank = [int](Get-OrchestraProperty $model 'quota_rank' 2)
         $sRank = [int](Get-OrchestraProperty $model 'speed_rank' 2)
         $capsObj = Get-OrchestraProperty $model 'caps'
@@ -119,6 +126,9 @@ function Build-RosterBlock {
         $capText = if ($orderedCaps.Count -gt 0) { $orderedCaps -join ', ' } else { '-' }
 
         $traits = New-Object 'System.Collections.Generic.List[string]'
+        if ([bool](Get-OrchestraProperty $model 'primary_disabled' $false)) {
+            [void]$traits.Add((U '\u4ec5\u5ba1\u67e5/\u628a\u5173\uff08\u7981\u4e3b\u5199\uff09'))
+        }
         if ([bool](Get-OrchestraProperty $invoke 'account_rotation' $false)) {
             [void]$traits.Add((U 'Cockpit \u81ea\u52a8\u5207\u53f7\u81ea\u6108'))
         }
@@ -129,8 +139,8 @@ function Build-RosterBlock {
         $traitText = if ($traits.Count -gt 0) { $traits -join '; ' } else { '-' }
 
         [void]$lines.Add((
-            '| **{0}** | `{1}` (`{2}`) | `{3}` | {4} | {5} | {6} | {7} |' -f
-            $display, $id, $channel, $effort, $capText,
+            '| **{0}** | `{1}` (`{2}`) | {3} | {4} | {5} | {6} | {7} |' -f
+            $display, $id, $channel, $effortCell, $capText,
             (Format-RankLabel $qRank 'quota'),
             (Format-RankLabel $sRank 'speed'),
             $traitText
@@ -177,14 +187,20 @@ function Build-RoutingBlock {
         [pscustomobject]@{ label = (U '\u524d\u7aef\u9875\u9762 / \u843d\u5730\u9875'); tags = 'frontend,landing_page' }
         [pscustomobject]@{ label = (U '\u540e\u7aef / API / \u5e76\u53d1'); tags = 'backend,concurrency' }
         [pscustomobject]@{ label = (U '\u6570\u5b66\u63a8\u5bfc / \u7b97\u6cd5'); tags = 'math,algorithm' }
+        [pscustomobject]@{ label = (U '\u7591\u96be Bug / \u6839\u56e0\u5b9a\u4f4d'); tags = 'bugfix' }
         [pscustomobject]@{ label = (U '\u8bba\u6587 / \u957f\u6587 / \u6587\u6848'); tags = 'prose,paper' }
         [pscustomobject]@{ label = (U '\u914d\u56fe / \u63d2\u753b / Mockup'); tags = 'image_gen' }
         [pscustomobject]@{ label = 'PPT / Word / Excel'; tags = 'office,ppt' }
         [pscustomobject]@{ label = (U '\u68c0\u7d22 / \u7efc\u8ff0 / \u5927\u4ed3\u5e93\u7406\u89e3'); tags = 'research,long_context' }
     )
 
+    $policyObj = Get-OrchestraProperty $Registry 'policy'
+    $defaultEffort = [string](Get-OrchestraProperty $policyObj 'default_effort' 'high')
+    $defaultMode = [string](Get-OrchestraProperty $policyObj 'default_mode' 'peak')
+
     $lines = New-Object 'System.Collections.Generic.List[string]'
     [void]$lines.Add(('- **' + (U '\u6807\u51c6\u80fd\u529b\u522b\u540d') + '**: ' + ($aliasPairs -join ', ')))
+    [void]$lines.Add(('- **' + (U '\u9ed8\u8ba4\u8def\u7531\u6a21\u5f0f') + '**: `' + $defaultMode + '` (' + (U '\u96f6\u989d\u5ea6/\u901f\u5ea6\u6263\u5206\uff0c\u7eaf\u80fd\u529b\u4e0a\u9650\u4f18\u5148') + ')'))
     [void]$lines.Add('')
     [void]$lines.Add((
         '| ' + (U '\u5178\u578b\u573a\u666f') + ' | ' + (U '\u6807\u7b7e') +
@@ -197,7 +213,16 @@ function Build-RoutingBlock {
 
     foreach ($sc in $scenarios) {
         $route = Invoke-CleanRoute -RouteScript $RouteScript -TagsCsv $sc.tags -RegistryFile $RegistryFile -EmptyStateDir $EmptyStateDir
-        $primaryCell = if ([bool](Get-OrchestraProperty $route 'blocked' $false) -or $null -eq $route.primary) { 'BLOCKED' } else { '`' + [string]$route.primary + '`' }
+        $pEffort = [string](Get-OrchestraProperty $route 'primary_effort' '')
+        $primaryCell = if ([bool](Get-OrchestraProperty $route 'blocked' $false) -or $null -eq $route.primary) {
+            'BLOCKED'
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($pEffort) -and $pEffort -cne $defaultEffort) {
+            '`{0}` (`{1}`)' -f [string]$route.primary, $pEffort
+        }
+        else {
+            '`' + [string]$route.primary + '`'
+        }
         $reviewerCell = if ($null -eq $route.reviewer) { '-' } else { '`' + [string]$route.reviewer + '`' }
         $polisherCell = if ($null -eq $route.polisher) { '-' } else { '`' + [string]$route.polisher + '`' }
         $patternCell = '`' + [string](Get-OrchestraProperty $route 'pattern' 'solo') + '`'

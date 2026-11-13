@@ -137,6 +137,7 @@
     }
   ],
   "modes": {
+    "peak": { "lambda_q": 0.0, "lambda_s": 0.0 },
     "balanced": { "lambda_q": 0.8, "lambda_s": 0.5 },
     "quality": { "lambda_q": 0.2, "lambda_s": 0.1 },
     "economy": { "lambda_q": 1.5, "lambda_s": 0.5 },
@@ -161,7 +162,10 @@
     "redo_min_samples": 3,
     "redo_penalty_scale": 3.0,
     "escalate_after_failures": 2,
+    "default_mode": "peak",
     "default_effort": "high",
+    "peak_effort_tags": ["math", "concurrency", "algorithm", "bugfix"],
+    "dual_draft_tags": ["algorithm", "concurrency", "bugfix", "math"],
     "usage_compact_bytes": 2097152,
     "usage_retain_days": 90,
     "history_keep_count": 30,
@@ -181,6 +185,7 @@
       "invoke": {
         "model_flag": "gpt-6-astra",
         "default_effort": "high",
+        "peak_effort": "xhigh",
         "efforts": ["low", "medium", "high", "xhigh"],
         "account_rotation": true,
         "rotation_max_retries": 2,
@@ -193,7 +198,7 @@
       "ranks_locked": true,
       "escalation_only": false,
       "escalate_to": null,
-      "fallback": ["gemini-4-carbon", "claude-opus-5-5"],
+      "fallback": ["gemini-4-carbon"],
       "caps": {
         "code_rigor": { "score": 10, "approved_score": 10, "source": "user", "locked": true, "confidence": 0.8 },
         "backend": { "score": 10, "approved_score": 10, "source": "user", "locked": true, "confidence": 0.8 },
@@ -245,6 +250,7 @@
       "quota_rank": 1,
       "speed_rank": 2,
       "ranks_locked": true,
+      "primary_disabled": true,
       "escalation_only": false,
       "escalate_to": null,
       "fallback": ["gemini-4-carbon"],
@@ -470,6 +476,6 @@
       ]
     }
   ],
-  "registry_rev": 3,
-  "updated": "2026-11-10T19:47:00.0000000Z"
+  "registry_rev": 4,
+  "updated": "2026-11-13T01:05:00.0000000Z"
 }
