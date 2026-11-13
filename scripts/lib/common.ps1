@@ -576,6 +576,115 @@ function Stop-OrchestraProcessTree {
     }
 }
 
+function Get-OrchestraSystemProxy {
+    $override = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_PROXY')
+    if (-not [string]::IsNullOrWhiteSpace($override)) {
+        $trimmedOverride = $override.Trim()
+        if ($trimmedOverride -ieq 'NONE') {
+            return @{ proxy = $null; host = $null; port = 0; source = 'disabled' }
+        }
+        if ($trimmedOverride -notmatch '^[a-zA-Z][a-zA-Z0-9+.-]*://') {
+            $trimmedOverride = 'http://' + $trimmedOverride
+        }
+        $u = $null
+        if ([Uri]::TryCreate($trimmedOverride, [UriKind]::Absolute, [ref]$u)) {
+            return @{ proxy = $trimmedOverride; host = $u.Host; port = $u.Port; source = 'override' }
+        }
+        return @{ proxy = $trimmedOverride; host = $null; port = 0; source = 'override' }
+    }
+
+    try {
+        $inet = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction SilentlyContinue
+        if ($null -ne $inet -and [int]$inet.ProxyEnable -eq 1 -and -not [string]::IsNullOrWhiteSpace([string]$inet.ProxyServer)) {
+            $rawProxy = ([string]$inet.ProxyServer).Trim()
+            if ($rawProxy -match '(?:^|;)https=([^;]+)') {
+                $rawProxy = $Matches[1].Trim()
+            }
+            elseif ($rawProxy -match '(?:^|;)http=([^;]+)') {
+                $rawProxy = $Matches[1].Trim()
+            }
+            elseif ($rawProxy.Contains(';')) {
+                $rawProxy = ($rawProxy -split ';')[0].Trim()
+            }
+            if (-not [string]::IsNullOrWhiteSpace($rawProxy)) {
+                if ($rawProxy -notmatch '^[a-zA-Z][a-zA-Z0-9+.-]*://') {
+                    $rawProxy = 'http://' + $rawProxy
+                }
+                $u = $null
+                if ([Uri]::TryCreate($rawProxy, [UriKind]::Absolute, [ref]$u)) {
+                    return @{ proxy = $rawProxy; host = $u.Host; port = $u.Port; source = 'hkcu' }
+                }
+                return @{ proxy = $rawProxy; host = $null; port = 0; source = 'hkcu' }
+            }
+        }
+    }
+    catch {}
+
+    foreach ($envName in @('HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy')) {
+        $val = [Environment]::GetEnvironmentVariable($envName)
+        if (-not [string]::IsNullOrWhiteSpace($val)) {
+            $cleanVal = $val.Trim()
+            if ($cleanVal -notmatch '^[a-zA-Z][a-zA-Z0-9+.-]*://') {
+                $cleanVal = 'http://' + $cleanVal
+            }
+            $u = $null
+            if ([Uri]::TryCreate($cleanVal, [UriKind]::Absolute, [ref]$u)) {
+                return @{ proxy = $cleanVal; host = $u.Host; port = $u.Port; source = 'env' }
+            }
+            return @{ proxy = $cleanVal; host = $null; port = 0; source = 'env' }
+        }
+    }
+    return @{ proxy = $null; host = $null; port = 0; source = 'none' }
+}
+
+function Test-OrchestraLocalProxy {
+    param(
+        [string]$ProxyUrl,
+        [int]$TimeoutMs = 1200
+    )
+    if ([string]::IsNullOrWhiteSpace($ProxyUrl)) {
+        return @{ checked = $false; reachable = $true; detail = 'No proxy configured.' }
+    }
+    $uri = $null
+    if (-not [Uri]::TryCreate($ProxyUrl, [UriKind]::Absolute, [ref]$uri) -or $uri.Port -le 0) {
+        return @{ checked = $false; reachable = $true; detail = $ProxyUrl }
+    }
+    $hostLower = ([string]$uri.Host).Trim('[', ']').ToLowerInvariant()
+    if ($hostLower -notin @('127.0.0.1', 'localhost', '::1')) {
+        return @{ checked = $false; reachable = $true; detail = $ProxyUrl }
+    }
+    $connectHost = if ($hostLower -eq 'localhost') { '127.0.0.1' } else { $hostLower }
+    $tcp = New-Object System.Net.Sockets.TcpClient
+    try {
+        $connectTask = $tcp.ConnectAsync($connectHost, $uri.Port)
+        $completed = $false
+        try {
+            $completed = $connectTask.Wait($TimeoutMs)
+        }
+        catch {
+            $completed = $false
+        }
+        if ($completed -and $tcp.Connected -and -not $connectTask.IsFaulted) {
+            return @{ checked = $true; reachable = $true; detail = $ProxyUrl }
+        }
+        return @{
+            checked = $true
+            reachable = $false
+            detail = ('Local proxy ' + $ProxyUrl + ' is unreachable (TCP connect failed within ' + $TimeoutMs + 'ms).')
+        }
+    }
+    catch {
+        return @{
+            checked = $true
+            reachable = $false
+            detail = ('Local proxy ' + $ProxyUrl + ' check failed: ' + $_.Exception.Message)
+        }
+    }
+    finally {
+        try { $tcp.Dispose() } catch {}
+    }
+}
+
 function Invoke-OrchestraProcess {
     param(
         [string]$FilePath,
@@ -583,7 +692,11 @@ function Invoke-OrchestraProcess {
         [AllowNull()][string]$InputText = $null,
         [string]$WorkDir,
         [int]$TimeoutSec = 1800,
+        [int]$StartupTimeoutSec = 0,
+        [hashtable]$Environment = @{},
         [scriptblock]$OnStdout,
+        [scriptblock]$OnStderr,
+        [scriptblock]$ShouldAbort,
         [switch]$ForwardStderr,
         [switch]$CaptureStdout
     )
@@ -624,6 +737,19 @@ function Invoke-OrchestraProcess {
     $info.Arguments = $argumentText
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
+    if ($null -ne $Environment) {
+        foreach ($envKey in $Environment.Keys) {
+            $envVal = $Environment[$envKey]
+            if ($null -eq $envVal) {
+                if ($info.EnvironmentVariables.ContainsKey([string]$envKey)) {
+                    $info.EnvironmentVariables.Remove([string]$envKey)
+                }
+            }
+            else {
+                $info.EnvironmentVariables[[string]$envKey] = [string]$envVal
+            }
+        }
+    }
     if ($null -ne $shimScript) {
         $info.EnvironmentVariables['ORCHESTRA_SHIM_SCRIPT'] = $shimScript
         $info.EnvironmentVariables['ORCHESTRA_SHIM_ARGV'] = $shimArgv
@@ -643,6 +769,9 @@ function Invoke-OrchestraProcess {
     $writer = $null
     $watch = [Diagnostics.Stopwatch]::StartNew()
     $timedOut = $false
+    $startupTimedOut = $false
+    $aborted = $false
+    $firstStdoutSeen = $false
     $truncated = $false
     $exitSeenAt = $null
     $started = $false
@@ -672,8 +801,15 @@ function Invoke-OrchestraProcess {
         else { $process.StandardInput.Close() }
 
         while ($true) {
-            if (-not $timedOut -and $TimeoutSec -gt 0 -and
+            if (-not $timedOut -and -not $aborted -and $TimeoutSec -gt 0 -and
                 $watch.Elapsed.TotalSeconds -ge $TimeoutSec) {
+                $timedOut = $true
+                Stop-OrchestraProcessTree -Process $process
+            }
+            if (-not $timedOut -and -not $aborted -and -not $firstStdoutSeen -and
+                $StartupTimeoutSec -gt 0 -and
+                $watch.Elapsed.TotalSeconds -ge $StartupTimeoutSec) {
+                $startupTimedOut = $true
                 $timedOut = $true
                 Stop-OrchestraProcessTree -Process $process
             }
@@ -693,6 +829,7 @@ function Invoke-OrchestraProcess {
                 $line = $outputTask.GetAwaiter().GetResult()
                 $progress = $true
                 if ($null -eq $line) { $outputDone = $true; break }
+                $firstStdoutSeen = $true
                 if ($CaptureStdout) { [void]$stdout.Add($line) }
                 if ($null -ne $OnStdout) { $null = & $OnStdout $line }
                 $outputTask = $process.StandardOutput.ReadLineAsync()
@@ -704,7 +841,15 @@ function Invoke-OrchestraProcess {
                 if ($null -eq $line) { $errorDone = $true; break }
                 [void]$stderr.Add($line)
                 if ($ForwardStderr) { [Console]::Error.WriteLine($line) }
+                if ($null -ne $OnStderr) { $null = & $OnStderr $line }
                 $errorTask = $process.StandardError.ReadLineAsync()
+            }
+            if (-not $process.HasExited -and -not $timedOut -and -not $aborted -and
+                $null -ne $ShouldAbort) {
+                if ([bool](& $ShouldAbort)) {
+                    $aborted = $true
+                    Stop-OrchestraProcessTree -Process $process
+                }
             }
             if ($process.HasExited) {
                 if ($null -eq $exitSeenAt) {
@@ -724,7 +869,9 @@ function Invoke-OrchestraProcess {
         $exitCode = 3
         if ($process.HasExited) { $exitCode = $process.ExitCode }
         return @{
-            exit_code = $exitCode; timeout = $timedOut; truncated = $truncated
+            exit_code = $exitCode; timeout = $timedOut
+            startup_timeout = $startupTimedOut; aborted = $aborted
+            truncated = $truncated
             stdout = $stdout.ToArray(); stderr = $stderr.ToArray()
         }
     }

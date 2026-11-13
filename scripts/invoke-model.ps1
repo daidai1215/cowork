@@ -13,6 +13,9 @@ param(
     [string]$JsonSchema,
     [string[]]$Tags = @(),
     [int]$TimeoutSec = 1800,
+    [int]$ConnectTimeoutSec = 0,
+    [switch]$AllowCodexShell,
+    [string]$StatusFile,
     [switch]$DryRun,
     [string]$RegistryPath,
     [string]$StateDir
@@ -25,7 +28,9 @@ function New-InvocationCapture {
         session_id = $null; quota = $false; model_error = $false
         failed = $false; saw_completion = $false; agy_response = $null
         codex_messages = New-Object 'System.Collections.Generic.List[string]'
-        timeout = $false; truncated = $false
+        timeout = $false; startup_timeout = $false; truncated = $false
+        reconnect_count = 0; reconnect_aborted = $false; events_count = 0
+        phase = 'starting'; last_event_type = $null
         auth_interrupted = $false; resume_incompatible = $false
         agy_not_logged_in = $false
         diagnostics = New-Object 'System.Collections.Generic.List[string]'
@@ -82,6 +87,15 @@ $accountSwitched = $false
 $resumeInvalidated = $false
 $replanRequired = $false
 $replanDetail = $null
+$codexShellEnabled = $false
+$effectiveConnectTimeout = 0
+$reconnectAbortLimit = 2
+$proxyUrl = $null
+$liveStatusPath = $null
+$latestChannelStatusPath = $null
+$explicitStatusPath = $null
+$reportedStatusFile = $null
+$startedUtc = (Get-OrchestraNow).ToString('o')
 $rotationEnabled = $false
 $rotationWaitMs = 0
 $maxRetries = 0
@@ -97,7 +111,7 @@ try {
     if ($hasPrompt -eq $hasPromptFile) {
         throw 'ORCHESTRA_ARGS: Specify exactly one of -Prompt or -PromptFile.'
     }
-    if ($Access -notin @('read', 'write') -or $TimeoutSec -lt 0) {
+    if ($Access -notin @('read', 'write') -or $TimeoutSec -lt 0 -or $ConnectTimeoutSec -lt 0) {
         throw 'ORCHESTRA_ARGS: Invalid access or timeout.'
     }
     if (-not [IO.Directory]::Exists($WorkDir)) {
@@ -233,10 +247,46 @@ try {
         }
     }
 
+    if (-not [string]::IsNullOrWhiteSpace($StatusFile)) {
+        $explicitStatusPath = $StatusFile
+        if (-not [IO.Path]::IsPathRooted($explicitStatusPath)) {
+            $explicitStatusPath = Join-Path $WorkDir $explicitStatusPath
+        }
+        $explicitStatusPath = [IO.Path]::GetFullPath($explicitStatusPath)
+    }
+
+    $childEnvironment = @{}
+    if ($ConnectTimeoutSec -gt 0) {
+        $effectiveConnectTimeout = $ConnectTimeoutSec
+    }
+    elseif ($channel -eq 'codex') {
+        $effectiveConnectTimeout = [int](Get-OrchestraProperty $invoke 'connect_timeout_sec' 25)
+    }
+    if ($TimeoutSec -gt 0 -and $effectiveConnectTimeout -gt $TimeoutSec) {
+        $effectiveConnectTimeout = $TimeoutSec
+    }
+    $reconnectAbortLimit = [int](Get-OrchestraProperty $invoke 'reconnect_abort_count' 2)
+
     $arguments = New-Object 'System.Collections.Generic.List[string]'
     $stdinText = $null
     $promptInFile = $false
     if ($channel -eq 'codex') {
+        $proxyInfo = Get-OrchestraSystemProxy
+        if (-not [string]::IsNullOrWhiteSpace([string]$proxyInfo.proxy)) {
+            $proxyUrl = [string]$proxyInfo.proxy
+            $childEnvironment['HTTP_PROXY'] = $proxyUrl
+            $childEnvironment['HTTPS_PROXY'] = $proxyUrl
+            $childEnvironment['ALL_PROXY'] = $proxyUrl
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('NO_PROXY'))) {
+                $childEnvironment['NO_PROXY'] = 'localhost,127.0.0.1,::1'
+            }
+        }
+        $needsPluginTools = (
+            @($Tags | Where-Object { @('image_gen', 'office', 'ppt') -contains $_ }).Count -gt 0
+        )
+        $directWorkspaceWrite = ($Access -eq 'write' -and $null -eq $outputPath)
+        $codexShellEnabled = ([bool]$AllowCodexShell -or $needsPluginTools -or $directWorkspaceWrite)
+
         if ($DryRun) {
             $executable = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_CODEX')
             if ([string]::IsNullOrWhiteSpace($executable)) { $executable = 'codex.exe' }
@@ -251,13 +301,51 @@ try {
                 $resolveOptions.RotationWaitMs = $rotationWaitMs
             }
             $executable = Resolve-CodexExe @resolveOptions
+            if (
+                -not [string]::IsNullOrWhiteSpace($proxyUrl) -and
+                [IO.Path]::GetExtension($executable) -ieq '.exe' -and
+                [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_SKIP_PROXY_PRECHECK') -ne '1'
+            ) {
+                $proxyCheck = Test-OrchestraLocalProxy -ProxyUrl $proxyUrl -TimeoutMs 1200
+                if (-not $proxyCheck.reachable) {
+                    throw ('ORCHESTRA_EXTERNAL: ' + $proxyCheck.detail)
+                }
+            }
         }
         foreach ($argument in @(
             'exec', '--json', '-s',
             $(if ($Access -eq 'read') { 'read-only' } else { 'workspace-write' }),
+            '--disable', 'unbounded_connection_retries',
             '--skip-git-repo-check', '-C', $WorkDir,
             '-m', $flag, '-c', ('model_reasoning_effort="' + $Effort + '"')
         )) { [void]$arguments.Add([string]$argument) }
+        if (-not $codexShellEnabled) {
+            foreach ($disableFlag in @('--disable', 'shell_tool', '--disable', 'unified_exec')) {
+                [void]$arguments.Add([string]$disableFlag)
+            }
+        }
+        $normWorkRoot = $WorkDir.TrimEnd('\', '/') + '\'
+        $addedDirs = @{}
+        $extraDirCandidates = New-Object 'System.Collections.Generic.List[string]'
+        if ($hasPromptFile) {
+            [void]$extraDirCandidates.Add([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($PromptFile)))
+        }
+        if ($null -ne $outputPath) {
+            [void]$extraDirCandidates.Add([IO.Path]::GetDirectoryName($outputPath))
+        }
+        foreach ($candDir in $extraDirCandidates) {
+            if ([string]::IsNullOrWhiteSpace($candDir)) { continue }
+            $fullCand = [IO.Path]::GetFullPath($candDir)
+            $normCand = $fullCand.TrimEnd('\', '/') + '\'
+            $candKey = $fullCand.ToLowerInvariant()
+            if (-not $normCand.StartsWith($normWorkRoot, [StringComparison]::OrdinalIgnoreCase) -and
+                -not $addedDirs.ContainsKey($candKey) -and
+                ($DryRun -or [IO.Directory]::Exists($fullCand))) {
+                $addedDirs[$candKey] = $true
+                [void]$arguments.Add('--add-dir')
+                [void]$arguments.Add($fullCand)
+            }
+        }
         if ($null -ne $outputPath) {
             [void]$arguments.Add('-o')
             [void]$arguments.Add($outputPath)
@@ -328,26 +416,105 @@ try {
             arguments = $arguments.ToArray(); stdin = $stdinText
             prompt_in_file = $promptInFile; prompt_file = $temporaryPrompt
             access = $Access; work_dir = $WorkDir; effort = $Effort
+            connect_timeout_sec = $effectiveConnectTimeout
+            codex_shell_enabled = $codexShellEnabled
         }
     }
     else {
         if ($null -ne $outputPath) {
             [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($outputPath))
         }
+        if (-not $adHoc -and $null -ne $paths) {
+            $liveDir = Join-Path $paths.StateDir 'live'
+            $liveStatusPath = Join-Path $liveDir ($invocationId + '.json')
+            $latestChannelStatusPath = if ($channel -eq 'codex') {
+                Join-Path $liveDir 'latest-codex.json'
+            }
+            else {
+                Join-Path $liveDir 'latest-agy.json'
+            }
+        }
+        $reportedStatusFile = if ($null -ne $explicitStatusPath) {
+            $explicitStatusPath
+        }
+        else {
+            $liveStatusPath
+        }
+
+        $writeStatus = {
+            param([string]$Phase, [string]$LastEvent = $null, [string]$Detail = $null)
+            $capture.phase = $Phase
+            if (-not [string]::IsNullOrWhiteSpace($LastEvent)) {
+                $capture.last_event_type = $LastEvent
+            }
+            $targets = @(
+                foreach ($p in @($liveStatusPath, $latestChannelStatusPath, $explicitStatusPath)) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$p)) { [string]$p }
+                }
+            ) | Select-Object -Unique
+            if (@($targets).Count -eq 0) { return }
+            $payload = [ordered]@{
+                invocation_id = $invocationId
+                model = $modelId
+                channel = $channel
+                effort = $Effort
+                attempt = [int]$attempts
+                phase = $Phase
+                session_id = $capture.session_id
+                proxy = $proxyUrl
+                codex_shell_enabled = [bool]$codexShellEnabled
+                started_utc = $startedUtc
+                updated_utc = (Get-OrchestraNow).ToString('o')
+                elapsed_sec = [Math]::Round($watch.Elapsed.TotalSeconds, 3)
+                events_count = [int]$capture.events_count
+                reconnect_count = [int]$capture.reconnect_count
+                last_event_type = $capture.last_event_type
+                detail = $Detail
+            }
+            foreach ($targetPath in $targets) {
+                try { Write-JsonAtomic -Path $targetPath -Object $payload } catch {}
+            }
+        }
+
+        $checkReconnectLine = {
+            param([string]$TextLine)
+            if ($channel -ne 'codex' -or [string]::IsNullOrWhiteSpace($TextLine)) { return }
+            if ($TextLine -match '(?i)(?:\breconnecting\s*\.\.\.|\bstream disconnected\b|\berror sending request for url\b)') {
+                $capture.reconnect_count++
+                $null = & $writeStatus 'reconnecting' 'reconnect_warning' $TextLine
+                if ($reconnectAbortLimit -gt 0 -and $capture.reconnect_count -ge $reconnectAbortLimit) {
+                    $capture.reconnect_aborted = $true
+                    $capture.failed = $true
+                }
+            }
+        }
+
+        $onStderr = {
+            param([string]$ErrLine)
+            $null = & $checkReconnectLine $ErrLine
+        }
+
+        $shouldAbort = {
+            return [bool]$capture.reconnect_aborted
+        }
+
         $onLine = {
             param([string]$Line)
             try { $eventObject = $Line | ConvertFrom-Json }
             catch {
                 [void]$capture.diagnostics.Add($Line)
                 [Console]::Error.WriteLine($Line)
+                $null = & $checkReconnectLine $Line
                 return
             }
             if ($null -eq $eventObject -or $eventObject -is [string] -or
                 $eventObject -is [ValueType] -or $eventObject -is [array]) {
                 [void]$capture.diagnostics.Add($Line)
                 [Console]::Error.WriteLine($Line)
+                $null = & $checkReconnectLine $Line
                 return
             }
+            $capture.events_count++
             [Console]::Out.WriteLine($Line)
             [Console]::Out.Flush()
             if ($channel -eq 'codex') {
@@ -357,23 +524,49 @@ try {
                     if (-not [string]::IsNullOrWhiteSpace($session)) {
                         $capture.session_id = $session
                     }
+                    $null = & $writeStatus 'connected' 'thread.started' $null
+                }
+                elseif ($type -eq 'turn.started') {
+                    $null = & $writeStatus 'connected' 'turn.started' $null
+                }
+                elseif ($type -eq 'item.started') {
+                    $startedItem = Get-OrchestraProperty $eventObject 'item'
+                    $startedItemType = [string](Get-OrchestraProperty $startedItem 'type' '')
+                    $nextPhase = switch ($startedItemType) {
+                        'reasoning' { 'reasoning' }
+                        'agent_message' { 'responding' }
+                        default {
+                            if (-not [string]::IsNullOrWhiteSpace($startedItemType)) { 'tool_exec' }
+                            else { 'connected' }
+                        }
+                    }
+                    $null = & $writeStatus $nextPhase ('item.started:' + $startedItemType) $null
                 }
                 if ($type -eq 'item.completed') {
                     $itemObj = Get-OrchestraProperty $eventObject 'item'
+                    $completedType = [string](Get-OrchestraProperty $itemObj 'type' '')
                     if (
                         $null -ne $itemObj -and
-                        [string](Get-OrchestraProperty $itemObj 'type') -eq 'agent_message'
+                        $completedType -eq 'agent_message'
                     ) {
                         $msgText = [string](Get-OrchestraProperty $itemObj 'text' '')
                         if (-not [string]::IsNullOrWhiteSpace($msgText)) {
                             [void]$capture.codex_messages.Add($msgText)
                         }
+                        $null = & $writeStatus 'responding' 'item.completed:agent_message' $null
                     }
                 }
-                if ($type -eq 'turn.completed') { $capture.saw_completion = $true }
+                if ($type -eq 'turn.completed') {
+                    $capture.saw_completion = $true
+                    $null = & $writeStatus 'completed' 'turn.completed' $null
+                }
                 if ($type -in @('error', 'turn.failed')) {
-                    $capture.failed = $true
-                    Set-InvocationError -Capture $capture -ErrorObject $eventObject -Codex $true
+                    $errMsgText = ConvertTo-Json -InputObject $eventObject -Depth 8 -Compress
+                    $null = & $checkReconnectLine $errMsgText
+                    if ($type -eq 'turn.failed' -or -not $capture.reconnect_aborted) {
+                        $capture.failed = $true
+                        Set-InvocationError -Capture $capture -ErrorObject $eventObject -Codex $true
+                    }
                 }
             }
             else {
@@ -383,6 +576,7 @@ try {
                     if (-not [string]::IsNullOrWhiteSpace($session)) {
                         $capture.session_id = $session
                     }
+                    $null = & $writeStatus 'connected' 'init' $null
                 }
                 elseif ($eventName -eq 'result') {
                     $resultObject = Get-OrchestraProperty $eventObject 'result'
@@ -394,6 +588,7 @@ try {
                     if ($status -ceq 'SUCCESS') {
                         $capture.saw_completion = $true
                         $capture.agy_response = Get-OrchestraProperty $resultObject 'response'
+                        $null = & $writeStatus 'completed' 'result:SUCCESS' $null
                     }
                     else {
                         $capture.failed = $true
@@ -401,6 +596,7 @@ try {
                         Set-InvocationError -Capture $capture -ErrorObject (
                             Get-OrchestraProperty $resultObject 'response'
                         )
+                        $null = & $writeStatus 'failed' ('result:' + $status) $null
                     }
                 }
             }
@@ -441,10 +637,15 @@ try {
 
             $processException = $null
             $processResult = $null
+            $null = & $writeStatus 'connecting' 'process.start' $null
             try {
                 $processResult = Invoke-OrchestraProcess -FilePath $executable `
                     -Arguments $arguments.ToArray() -InputText $stdinText `
-                    -WorkDir $WorkDir -TimeoutSec $TimeoutSec -OnStdout $onLine -ForwardStderr
+                    -WorkDir $WorkDir -TimeoutSec $TimeoutSec `
+                    -StartupTimeoutSec $effectiveConnectTimeout `
+                    -Environment $childEnvironment `
+                    -OnStdout $onLine -OnStderr $onStderr `
+                    -ShouldAbort $shouldAbort -ForwardStderr
             }
             catch {
                 $processException = $_.Exception.Message
@@ -475,7 +676,11 @@ try {
             if ($null -ne $processResult) {
                 $providerExit = $processResult.exit_code
                 $capture.timeout = [bool]$processResult.timeout
+                $capture.startup_timeout = [bool](Get-OrchestraProperty $processResult 'startup_timeout' $false)
                 $capture.truncated = [bool]$processResult.truncated
+                if ([bool](Get-OrchestraProperty $processResult 'aborted' $false)) {
+                    $capture.failed = $true
+                }
                 $stderrText = $processResult.stderr -join "`n"
             }
             if ($channel -eq 'agy' -and
@@ -506,8 +711,25 @@ try {
                 $errorMessage = $null
                 break
             }
+            if ($capture.startup_timeout) {
+                $errorMessage = (
+                    'Startup handshake timed out after ' + $effectiveConnectTimeout +
+                    's without receiving initial provider event (check proxy/network).'
+                )
+                $null = & $writeStatus 'failed' 'startup_timeout' $errorMessage
+                break
+            }
             if ($capture.timeout) {
                 $errorMessage = 'Invocation timed out; process tree was terminated.'
+                $null = & $writeStatus 'failed' 'timeout' $errorMessage
+                break
+            }
+            if ($capture.reconnect_aborted -and -not $AttemptSwitched) {
+                $errorMessage = (
+                    'Connection aborted after ' + $capture.reconnect_count +
+                    ' repeated stream disconnect/reconnect failures.'
+                )
+                $null = & $writeStatus 'failed' 'reconnect_aborted' $errorMessage
                 break
             }
             if ($capture.model_error) {
@@ -675,12 +897,47 @@ if (-not $DryRun -and $null -ne $paths -and $null -ne $modelObject) {
         [Console]::Error.WriteLine($errorMessage)
     }
 }
+$finalStatusTargets = @(
+    foreach ($p in @($liveStatusPath, $latestChannelStatusPath, $explicitStatusPath)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$p)) { [string]$p }
+    }
+) | Select-Object -Unique
+if (-not $DryRun -and @($finalStatusTargets).Count -gt 0) {
+    $finalPhase = if ($exitCode -eq 0) { 'completed' } else { 'failed' }
+    $finalStatusPayload = [ordered]@{
+        invocation_id = $invocationId
+        model = $modelId
+        channel = $channel
+        effort = $Effort
+        attempt = [int]$attempts
+        phase = $finalPhase
+        exit = [int]$exitCode
+        session_id = $capture.session_id
+        proxy = $proxyUrl
+        codex_shell_enabled = [bool]$codexShellEnabled
+        started_utc = $startedUtc
+        updated_utc = (Get-OrchestraNow).ToString('o')
+        elapsed_sec = $duration
+        events_count = [int]$capture.events_count
+        reconnect_count = [int]$capture.reconnect_count
+        startup_timeout = [bool]$capture.startup_timeout
+        reconnect_aborted = [bool]$capture.reconnect_aborted
+        last_event_type = $capture.last_event_type
+        detail = $errorMessage
+    }
+    foreach ($targetPath in $finalStatusTargets) {
+        try { Write-JsonAtomic -Path $targetPath -Object $finalStatusPayload } catch {}
+    }
+}
+
 $finalResult = @{
     orchestra_result = $true; invocation_id = $invocationId
     model = $modelId; channel = $channel; effort = $Effort
     session_id = $capture.session_id
     exit = $exitCode; duration_sec = $duration; out_file = $outputPath
     quota_error = [bool]$capture.quota; timeout = [bool]$capture.timeout
+    startup_timeout = [bool]$capture.startup_timeout
+    reconnect_aborted = [bool]$capture.reconnect_aborted
     truncated = [bool]$capture.truncated; ad_hoc = $adHoc
     provider_exit = $providerExit; error = $errorMessage
     attempts = [int]$attempts
@@ -688,6 +945,9 @@ $finalResult = @{
     resume_invalidated = [bool]$resumeInvalidated
     replan_required = [bool]$replanRequired
     replan_detail = $replanDetail
+    proxy = $proxyUrl
+    codex_shell_enabled = [bool]$codexShellEnabled
+    status_file = $reportedStatusFile
 }
 foreach ($key in $dryData.Keys) { $finalResult[$key] = $dryData[$key] }
 Write-OrchestraResult -Object $finalResult

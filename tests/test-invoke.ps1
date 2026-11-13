@@ -10,7 +10,8 @@ $parentDirectory = $null
 $environmentNames = @(
     'MODEL_ORCHESTRA_AGY_WRAPPER', 'MODEL_ORCHESTRA_NOW',
     'MODEL_ORCHESTRA_CODEX', 'MODEL_ORCHESTRA_CODEX_HOME',
-    'MODEL_ORCHESTRA_ROTATION_WAIT_MS'
+    'MODEL_ORCHESTRA_ROTATION_WAIT_MS', 'MODEL_ORCHESTRA_PROXY',
+    'MODEL_ORCHESTRA_SKIP_PROXY_PRECHECK'
 )
 $savedEnvironment = @{}
 foreach ($name in $environmentNames) {
@@ -960,27 +961,149 @@ exit 0
         ) -and [IO.Directory]::Exists((Join-Path $fixtureState 'locks'))
     )
 
-    # Peak effort auto-boost, Re-plan circuit breaker, and atomic extract-files tests
+    # Peak effort auto-boost, pure-brain flags, proxy injection, handshake/reconnect watchdogs, heartbeat, and extract-files tests
     $peakReg = Read-JsonFile -Path $fixtureRegistry
     $peakPol = Get-OrchestraProperty $peakReg 'policy'
-    Set-OrchestraProperty $peakPol 'peak_effort_tags' @('math', 'concurrency', 'algorithm', 'bugfix')
+    Set-OrchestraProperty $peakPol 'peak_effort_tags' @('math')
     $astraFixture = @($peakReg.models | Where-Object { $_.id -eq 'gpt-6-astra' })[0]
     Set-OrchestraProperty $astraFixture.invoke 'peak_effort' 'xhigh'
+    Set-OrchestraProperty $astraFixture.invoke 'connect_timeout_sec' 25
+    Set-OrchestraProperty $astraFixture.invoke 'reconnect_abort_count' 2
     Write-JsonAtomic -Path $fixtureRegistry -Object $peakReg
 
     $boostRun = Invoke-TestScript -Script $invokeScript -Arguments (
         $baseArguments + @('-Model', 'gpt-6-astra', '-Tags', 'math,algorithm', '-Prompt', 'TEST', '-DryRun')
     )
-    Assert-Test 'Peak tag auto-boosts Astra effort to xhigh when -Effort omitted' (
+    $boostArgs = @($boostRun.json.arguments)
+    Assert-Test 'Peak math tag auto-boosts Astra effort to xhigh and enables pure-brain flags' (
         $boostRun.code -eq 0 -and $boostRun.json.effort -eq 'xhigh' -and
-        @($boostRun.json.arguments) -contains 'model_reasoning_effort="xhigh"'
+        $boostArgs -contains 'model_reasoning_effort="xhigh"' -and
+        $boostArgs -contains 'unbounded_connection_retries' -and
+        $boostArgs -contains 'shell_tool' -and
+        $boostArgs -contains 'unified_exec' -and
+        $boostRun.json.codex_shell_enabled -eq $false
     )
     $nonPeakRun = Invoke-TestScript -Script $invokeScript -Arguments (
-        $baseArguments + @('-Model', 'gpt-6-astra', '-Tags', 'prose', '-Prompt', 'TEST', '-DryRun')
+        $baseArguments + @('-Model', 'gpt-6-astra', '-Tags', 'bugfix', '-Prompt', 'TEST', '-DryRun')
     )
-    Assert-Test 'Non-peak tag preserves default high effort' (
+    Assert-Test 'Routine bugfix tag preserves fast high effort' (
         $nonPeakRun.code -eq 0 -and $nonPeakRun.json.effort -eq 'high'
     )
+
+    $subWorkDir = Join-Path $sandbox 'workdir-sub'
+    $extScratchDir = Join-Path $sandbox 'external-scratch'
+    [void][IO.Directory]::CreateDirectory($subWorkDir)
+    [void][IO.Directory]::CreateDirectory($extScratchDir)
+    $extOutFile = Join-Path $extScratchDir 'draft.md'
+    $shellOptInRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $fixtureState,
+        '-WorkDir', $subWorkDir, '-Model', 'gpt-6-astra',
+        '-Prompt', 'TEST', '-OutFile', $extOutFile, '-AllowCodexShell', '-DryRun'
+    )
+    $shellOptInArgs = @($shellOptInRun.json.arguments)
+    $addDirIdx = [Array]::IndexOf($shellOptInArgs, '--add-dir')
+    Assert-Test 'AllowCodexShell re-enables shell tools and mounts external scratch via --add-dir' (
+        $shellOptInRun.code -eq 0 -and
+        $shellOptInRun.json.codex_shell_enabled -eq $true -and
+        $shellOptInArgs -notcontains 'shell_tool' -and
+        $addDirIdx -ge 0 -and
+        $shellOptInArgs[$addDirIdx + 1] -ieq $extScratchDir
+    )
+
+    # Test local proxy precheck on an unused loopback port
+    $ephemeralListener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    $ephemeralListener.Start()
+    $closedPort = ([System.Net.IPEndPoint]$ephemeralListener.LocalEndpoint).Port
+    $ephemeralListener.Stop()
+    $deadProxyCheck = Test-OrchestraLocalProxy -ProxyUrl ("http://127.0.0.1:$closedPort") -TimeoutMs 600
+    Assert-Test 'Test-OrchestraLocalProxy detects unreachable local proxy port quickly' (
+        $deadProxyCheck.checked -eq $true -and $deadProxyCheck.reachable -eq $false
+    )
+
+    # Test Codex startup handshake timeout, reconnect storm abort, proxy env injection, and live heartbeat JSON
+    $watchdogCodexPath = Join-Path $sandbox 'watchdog codex.ps1'
+    $watchdogCodexText = @'
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$utf8 = New-Object Text.UTF8Encoding($false)
+[Console]::OutputEncoding = $utf8
+if (@($args) -contains '--version') {
+    [Console]::WriteLine('codex-cli 0.167.0')
+    exit 0
+}
+$case = [Console]::In.ReadToEnd().Trim()
+if ($case -eq 'HANG_BEFORE_FIRST_EVENT') {
+    Start-Sleep -Seconds 15
+    exit 0
+}
+if ($case -eq 'RECONNECT_STORM') {
+    [Console]::Error.WriteLine('Reconnecting... 1/5 (stream disconnected before completion)')
+    Start-Sleep -Milliseconds 150
+    [Console]::Error.WriteLine('Reconnecting... 2/5 (stream disconnected before completion)')
+    Start-Sleep -Seconds 15
+    exit 1
+}
+$seenProxy = [string][Environment]::GetEnvironmentVariable('HTTPS_PROXY')
+[Console]::WriteLine('{"type":"thread.started","thread_id":"live-hb-session"}')
+[Console]::WriteLine('{"type":"item.started","item":{"type":"reasoning"}}')
+[Console]::WriteLine(('{"type":"item.completed","item":{"type":"agent_message","text":"PROXY=' + $seenProxy + '"}}'))
+[Console]::WriteLine('{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}')
+exit 0
+'@
+    [IO.File]::WriteAllText($watchdogCodexPath, $watchdogCodexText, $script:OrchestraUtf8)
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX', $watchdogCodexPath)
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_PROXY', 'http://127.0.0.1:17900')
+
+    $wdHome = Join-Path $sandbox 'wd-home'
+    [void][IO.Directory]::CreateDirectory($wdHome)
+    [IO.File]::WriteAllBytes((Join-Path $wdHome 'auth.json'), $script:OrchestraUtf8.GetBytes('{"fixture":"wd"}'))
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME', $wdHome)
+    $wdState = Join-Path $sandbox 'wd-state'
+
+    $hangWatch = [Diagnostics.Stopwatch]::StartNew()
+    $hangRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $wdState,
+        '-WorkDir', $sandbox, '-Model', 'gpt-6-astra',
+        '-Prompt', 'HANG_BEFORE_FIRST_EVENT', '-ConnectTimeoutSec', '1', '-TimeoutSec', '20'
+    )
+    $hangWatch.Stop()
+    Assert-Test 'Startup handshake timeout aborts silent connect hang within ConnectTimeoutSec' (
+        $hangRun.code -eq 3 -and
+        $hangRun.json.timeout -eq $true -and
+        $hangRun.json.startup_timeout -eq $true -and
+        $hangWatch.Elapsed.TotalSeconds -lt 8
+    )
+
+    $stormWatch = [Diagnostics.Stopwatch]::StartNew()
+    $stormRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $wdState,
+        '-WorkDir', $sandbox, '-Model', 'gpt-6-astra',
+        '-Prompt', 'RECONNECT_STORM', '-TimeoutSec', '20'
+    )
+    $stormWatch.Stop()
+    Assert-Test 'Reconnect storm circuit breaker aborts hung Codex retry loop early' (
+        $stormRun.code -eq 3 -and
+        $stormRun.json.reconnect_aborted -eq $true -and
+        $stormWatch.Elapsed.TotalSeconds -lt 8
+    )
+
+    $hbOutPath = Join-Path $sandbox 'hb-out.txt'
+    $hbRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $wdState,
+        '-WorkDir', $sandbox, '-Model', 'gpt-6-astra',
+        '-Prompt', 'PROXY_AND_HEARTBEAT_OK', '-OutFile', $hbOutPath
+    )
+    $latestCodexStatusPath = Join-Path $wdState 'live\latest-codex.json'
+    $latestCodexStatus = Read-JsonFile -Path $latestCodexStatusPath
+    Assert-Test 'Codex invocation injects dynamic proxy and writes live heartbeat JSON' (
+        $hbRun.code -eq 0 -and
+        $hbRun.json.proxy -eq 'http://127.0.0.1:17900' -and
+        $null -ne $latestCodexStatus -and
+        $latestCodexStatus.phase -eq 'completed' -and
+        $latestCodexStatus.session_id -eq 'live-hb-session' -and
+        $latestCodexStatus.proxy -eq 'http://127.0.0.1:17900'
+    )
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_PROXY', $null)
 
     # Clear exhaustion state before testing live agy fake wrapper replan signal
     Invoke-WithLock -Paths $script:TestPaths -Name state -ScriptBlock {

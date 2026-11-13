@@ -9,7 +9,7 @@ description: 【多模型协同总调度·极致性能版】在 GPT-6 Astra（hi
 **运行时状态**：`$HOME\.cowork\`。其中 `state.json` 记录额度状态、基线与扫描时间，`usage.jsonl` 记录调用账本。
 **当前主力阵容与资源排序（由 `scripts/sync-docs.ps1` 自动同步）**：
 <!-- AUTO:ROSTER:START -->
-> 自动同步自 `registry/models.json` (`registry_rev: 4`, 活跃模型: 3)
+> 自动同步自 `registry/models.json` (`registry_rev: 5`, 活跃模型: 3)
 
 | 模型 | ID / 通道 | 默认档位 | 顶级长板（>=9） | 额度 (`quota_rank`) | 速度 (`speed_rank`) | 运行特性 |
 |---|---|---|---|---|---|---|
@@ -32,34 +32,37 @@ description: 【多模型协同总调度·极致性能版】在 GPT-6 Astra（hi
 
 ## 第 0 步：确认自己是谁（主控身份与极致性能准则）
 
-**当前对话所用模型即主控**，负责只读勘察立项、契约签发、实跑验收与熔断重排。默认路由模式为 **`peak`（零额度/速度扣分，纯冲能力上限）**：常规任务开 `high` 档；命中硬核标签（`math, concurrency, algorithm, bugfix`）或返工升级时，`gpt-6-astra` 自动升至 **`xhigh` 档**。**`claude-opus-5-5` 严格不解禁主写（`primary_disabled=true`）**，仅用于审美把关与精简方案终裁。
+**当前对话所用模型即主控**，负责只读勘察立项、契约签发、实跑验收与熔断重排。默认路由模式为 **`peak`（零额度/速度扣分，纯冲能力上限）**：常规代码/排错/并发一律开极速高质量 **`high` 档**（约 40~90 秒）；仅命中硬核数学证明（`math`）或初稿实跑未过带 `-AllowEscalation` 二次攻坚时，`gpt-6-astra` 才升至 **`xhigh` 档**。**`claude-opus-5-5` 严格不解禁主写（`primary_disabled=true`）**，仅用于审美把关与精简方案终裁。
 
-| 你在哪 | 你是谁 | 怎么调用 GPT-6 Astra (`high`/`xhigh`) | 怎么调用 Carbon / Opus (`high`) |
+| 你在哪 | 你是谁 | 怎么调用 GPT-6 Astra (`high` / 攻坚 `xhigh`) | 怎么调用 Carbon / Opus (`high`) |
 |---|---|---|---|
-| Antigravity，主控为 Gemini 4 Carbon | 1M 全局勘察、长文主创兼总控 | `invoke-model.ps1 -Model gpt-6-astra -Tags <tags>` | 审美/终裁调 Opus：`invoke-model.ps1 -Model claude-opus-5-5` |
-| Antigravity，主控为 Claude Opus 5.5 | **惜用模式的总控（禁铺写长代码/长文）** | 同上 | 勘察/起草一律派 Carbon：`invoke-model.ps1 -Model gemini-4-carbon` |
+| Antigravity，主控为 Gemini 4 Carbon | 1M 全局勘察、长文主创兼总控 | `invoke-model.ps1 -Model gpt-6-astra -Tags <tags>`（**`run_command` 首次必传 `BypassSandbox: true`**，切勿先跑默认断网沙箱） | 审美/终裁调 Opus：`invoke-model.ps1 -Model claude-opus-5-5`（**同样首次必传 `BypassSandbox: true`**） |
+| Antigravity，主控为 Claude Opus 5.5 | **惜用模式的总控（禁铺写长代码/长文）** | 同上（**首次必传 `BypassSandbox: true`**） | 勘察/起草一律派 Carbon：`invoke-model.ps1 -Model gemini-4-carbon`（**首次必传 `BypassSandbox: true`**） |
 | Codex，主控为 GPT-6 Astra | 硬核实现与严谨性总控 | （自身即 Astra） | `invoke-model.ps1 -Model gemini-4-carbon` / `claude-opus-5-5`，**必须申请 `sandbox_permissions="require_escalated"`**，否则会误报 “not logged into Antigravity”；不要给 agy 加 `--sandbox` |
 
+- **Antigravity 越沙箱直连铁律**：在 Antigravity 内调用 `invoke-model.ps1`、`detect-models.ps1`、`maintain.ps1`、`doctor.ps1 -ProbeCodexShell` 时，因必须访问本机代理端口（`127.0.0.1`）及 `~/.codex` / `~/.cowork` 目录，**第一次调用 `run_command` 就必须显式传 `BypassSandbox: true`**，严禁先跑必败的 `BypassSandbox: false` 白耗回合！
 - **Opus 5.5 严格保护铁律**：Opus 绝不进入 `primary` / `fallback` 主写池。Opus 任主控时仅做立项拍板与审美/架构终裁，全仓检索与大段实现一律派给 Carbon 或 Astra。
 - **GPT-6 Astra 任主控时**：全库 1M 通读、联网检索与文字定稿派给 Gemini 4 Carbon，审美把关派给 Opus 5.5，主控专注核心实现与形式化/严谨性把关。
 
-### 已知环境限制与 Cockpit 自动切号防护（必读）
+### 已知环境限制、极速直连与 Cockpit 自动切号防护（必读）
 
-1. **Cockpit 自动切换 Codex 账号（核心运行机制）**：
+1. **Codex 实时系统代理注入、端口快检与防死连熔断（`invoke-model.ps1` 已内置）**：
+   - **动态代理同步 + 1.2s 端口快检**：每次拉起 `codex.exe` 前自动读取注册表 `HKCU\...\Internet Settings` 注入最新 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`，并对本地代理端口做 1.2 秒 TCP 预检——若代理未开或端口变更不通，**1 秒内立即报错退出**，绝不盲等。
+   - **彻底关闭无限重连 + 25s 首包握手熔断**：强制向 `codex exec` 传入 `--disable unbounded_connection_retries`，并设 **25 秒首包握手超时**（`connect_timeout_sec=25`）与**重连风暴快断**（连续 2 次 `Reconnecting...` / `stream disconnected` 立即杀进程树），杜绝 1800 秒黑盒死等。
+2. **Cockpit 自动切换 Codex 账号（核心运行机制）**：
    - `gpt-6-astra` 单个账号额度较少，本机 **Cockpit** 会在后台自动切换 `~\.codex\auth.json`（期间在 `~\.codex\.cockpit-profile-mutation-locks` / `.cockpit-token-locks` 产生短暂锁，并对历史会话执行加密推理清洗）。
    - **严禁触碰明文凭证**：任何检查只允许看 `auth.json` 的 `LastWriteTime` 或由脚本计算不透明 SHA-256 指纹，**绝不读取或打印 `auth.json` 内容**。
    - **`invoke-model.ps1` 已内置切号自愈**：
-     - 单账号触发 429/额度限制，或执行途中因切号发生 401/流中断（`auth.json` 指纹变化）时，脚本**不会立即封禁模型**，而是自动等待 Cockpit 完成切号与锁释放（默认等 10 秒，最多自动重试 2 次 = 共 3 次尝试）。
-     - 仅当连续 3 次尝试均报额度耗尽（说明 Cockpit 账号池全部耗尽）时，才将 `gpt-6-astra` 短暂标记 `exhausted` **30 分钟**并返回退出码 4，再由主控切换 `fallback`。
+     - 单账号触发 429/额度限制，或执行途中因切号发生 401/流中断（`auth.json` 指纹变化）时，脚本自动等待 Cockpit 完成切号与锁释放（默认等 10 秒，最多自动重试 2 次 = 共 3 次尝试）。
+     - 仅当连续 3 次尝试均报额度耗尽时，才将 `gpt-6-astra` 短暂标记 `exhausted` **30 分钟**并返回退出码 4，再由主控切换 `fallback`。
    - **跨账号 `-Resume <sid>` 失效处理（`resume_invalidated=true`）**：
-     - 旧账号会话中的加密推理状态（`encrypted_content`）在切到新账号后可能无法续跑。一旦返回 JSON 中 `resume_invalidated=true`（或切号后 `-Resume` 报错），**严禁继续对旧 `<sid>` 重试**！必须立即**去掉 `-Resume` 开启新会话**，将 `<scratch>` 目录中已保存的共识方案、分块上下文或增量材料内联进提示词续接。
-2. **PATH 上的 `codex.exe` 为 0.145 旧版**：必须使用桌面版自带的新版 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`（`invoke-model.ps1` 自动解析）。
-3. **非交互 `codex exec` 中 GPT 的 shell 工具（code-mode host）限制与自进化探测**：
-   - 若 `$HOME\.cowork\state.json` 中 `codex_shell_probe.shell_works == true` 且版本匹配当前 `codex.exe`，说明新版 Codex CLI 已修复非交互 shell 卡死问题，可直接按需放行；否则向 GPT-6 Astra 派工时必须绕开 shell 工具调用：
-   - 审查类任务：将待审材料直接内联进提示词，明确声明“不要调用任何工具”；
-   - 实现类任务：要求按 `=====FILE: <相对路径>=====` … `=====END FILE=====` 纯文本输出完整文件，由主控执行 `scripts/extract-files.ps1 -InputFile <回答> -Root <项目> -AllowedPrefixes <允许写的前缀>` 落盘并实跑测试；
+     - 一旦返回 JSON 中 `resume_invalidated=true`，**严禁继续对旧 `<sid>` 重试**！必须立即**去掉 `-Resume` 开启新会话**，将 `<scratch>/plan_contract.md` 等阶段上下文内联续接。
+3. **PATH 上的 `codex.exe` 为 0.145 旧版**：必须使用桌面版自带的新版 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`（`invoke-model.ps1` 自动解析）。
+4. **GPT 默认“纯推理大脑快道”（硬件级禁内部 Shell 防沙箱假死）**：
+   - 本地工具极快的 Gemini 4 Carbon 负责读文件、将上下文与契约打包进 `<scratch>/plan_contract.md`；
+   - `invoke-model.ps1` 在默认 `-Access read`（含 `-OutFile` 纯文本代码块交付）下自动追加 `--disable shell_tool --disable unified_exec`，并自动通过 `--add-dir` 挂载 `-PromptFile` / `-OutFile` 所在的 `<scratch>` 目录——从命令行层面拔掉易卡死的 Windows 内部沙箱 shell，让 GPT 直奔推理与代码生成（仅 `image_gen` / `office` / `ppt` 标签、直接 `-Access write` 无 `-OutFile`，或显式传 `-AllowCodexShell` 时才启用 Codex 内部工具）。
    - agy（Gemini 4 Carbon / Opus 5.5）的文件与终端工具正常，可直接使用 `-Access write`。
-4. **PowerShell 5.1 编码陷阱**：含中文的 `.ps1` 必须保存为 UTF-8 with BOM（`extract-files.ps1` 已自动处理），命令行不要直接传中文字面量，统一走 `-PromptFile`。
+5. **PowerShell 5.1 编码陷阱**：含中文的 `.ps1` 必须保存为 UTF-8 with BOM（`extract-files.ps1` 已自动处理），命令行不要直接传中文字面量，统一走 `-PromptFile`。
 
 所有脚本统一按以下方式调用：
 `powershell -NoProfile -ExecutionPolicy Bypass -File "ROOT\scripts\<脚本>.ps1" ...`
@@ -88,7 +91,7 @@ detect-models.ps1          # 24 小时内已扫描过会直接返回 {"skipped":
 3. 主控可否决 route 的建议，但必须在最终汇报中说明理由。
 
 **硬规则**（`route.ps1` 与 `models.json` 已双锁死，主控必须遵守）：
-- **零额度税冲上限**：默认 `peak` 模式（$\lambda_q=0,\ \lambda_s=0$）下，Astra 与 Carbon 纯按能力分竞争主写；命中 `math / concurrency / algorithm / bugfix` 或带 `-AllowEscalation` 时，Astra 自动拉满至 **`xhigh` 档**。
+- **零额度税冲上限 + 档位提速**：默认 `peak` 模式（$\lambda_q=0,\ \lambda_s=0$）下，Astra 与 Carbon 纯按能力分竞争主写；常规 `bugfix / concurrency / algorithm / backend` 默认跑极速高质量 **`high` 档**，仅硬核 `math` 或带 `-AllowEscalation` 返工升级时才拉满至 **`xhigh` 档**。
 - **Opus 5.5 不解禁主写**：`claude-opus-5-5` 已锁定 `primary_disabled=true`，永不承担大段初稿或主写兜底；前端、UI、落地页走 Aesthetic Gate（Carbon `high` 主写，Opus 5.5 `high` 仅审多视口截图、design tokens 与关键组件片段；Opus 不可用时由 Carbon 另开独立会话对照清单自审）。
 - **生图独占**：生图仅走 Codex（`gpt-6-astra` `image_gen`）。
 - **异构复核与去防御性定稿**：数学、后端、疑难 Bug 由 `gpt-6-astra` 主攻、异构厂商 `gemini-4-carbon` 任独立实跑验证员（Active Verifier）；最终文字润色统一交 `best-prose`（`gemini-4-carbon` `high`），剔除一切防御性套话。
@@ -101,9 +104,9 @@ detect-models.ps1          # 24 小时内已扫描过会直接返回 {"skipped":
 | 典型场景 | 标签 (`-Tags`) | 主执行 (`primary`) | 审查 (`reviewer`) | 润色 (`polisher`) | 协作模式 (`pattern`) |
 |---|---|---|---|---|---|
 | 前端页面 / 落地页 | `frontend,landing_page` | `gemini-4-carbon` | `claude-opus-5-5` | - | `aesthetic_gate` |
-| 后端 / API / 并发 | `backend,concurrency` | `gpt-6-astra` (`xhigh`) | `gemini-4-carbon` | - | `pipelined_review` |
+| 后端 / API / 并发 | `backend,concurrency` | `gpt-6-astra` | `gemini-4-carbon` | - | `pipelined_review` |
 | 数学推导 / 算法 | `math,algorithm` | `gpt-6-astra` (`xhigh`) | `gemini-4-carbon` | - | `pipelined_review` |
-| 疑难 Bug / 根因定位 | `bugfix` | `gpt-6-astra` (`xhigh`) | `gemini-4-carbon` | - | `pipelined_review` |
+| 疑难 Bug / 根因定位 | `bugfix` | `gpt-6-astra` | `gemini-4-carbon` | - | `pipelined_review` |
 | 论文 / 长文 / 文案 | `prose,paper` | `gemini-4-carbon` | `gpt-6-astra` | - | `pipelined_review` |
 | 配图 / 插画 / Mockup | `image_gen` | `gpt-6-astra` | `claude-opus-5-5` | - | `strength_delegation` |
 | PPT / Word / Excel | `office,ppt` | `gpt-6-astra` | `claude-opus-5-5` | - | `strength_delegation` |
@@ -139,41 +142,38 @@ detect-models.ps1          # 24 小时内已扫描过会直接返回 {"skipped":
 ## 第 4 步：调用外部模型与原子落盘（统一入口）
 
 ```powershell
-invoke-model.ps1 -Model <id|别名> -Access read|write -PromptFile <f> -WorkDir <d> [-Tags <tags>] [-Effort <e>] [-Resume <sid>] [-OutFile <f>] [-JsonSchema <f>] [-DryRun]
+# Antigravity 内调用 run_command 时，首次必须直接传 BypassSandbox: true！
+invoke-model.ps1 -Model <id|别名> -Access read|write -PromptFile <f> -WorkDir <d> [-Tags <tags>] [-Effort <e>] [-ConnectTimeoutSec <n>] [-AllowCodexShell] [-StatusFile <f>] [-Resume <sid>] [-OutFile <f>] [-JsonSchema <f>] [-DryRun]
 extract-files.ps1 -InputFile <f> -Root <d> -AllowedPrefixes <p1,p2> [-ForbiddenPrefixes <f1,f2>] [-DryRun]
 ```
 
-- 别名与自动升档：支持全部模型 ID 与 `best-*` 能力别名；未显式传 `-Effort` 且 `-Tags` 命中 `peak_effort_tags` 时，自动升至模型的 `peak_effort`（如 Astra 自动升 `xhigh`）。
-- 输出末行为汇总 JSON，包含 `effort`、`session_id`、`attempts`、`account_switched`、`resume_invalidated`、`quota_error`、`replan_required`、`replan_detail`。
+- 别名与自动升档：支持全部模型 ID 与 `best-*` 能力别名；未显式传 `-Effort` 且 `-Tags` 命中 `peak_effort_tags`（当前仅 `math`）时自动升至 `xhigh`，其余日常场景保持快速的 `high` 档。
+- 输出末行为汇总 JSON，包含 `effort`、`session_id`、`proxy`、`codex_shell_enabled`、`startup_timeout`、`reconnect_aborted`、`status_file`、`attempts`、`account_switched`、`resume_invalidated`、`quota_error`、`replan_required`、`replan_detail`。
 - **熔断拦截**：若 `replan_required=true`（或 `extract-files.ps1` 返回退出码 `3`），严禁强行落盘，主控必须回到只读勘察更新 `plan_contract.md` 后重派。
 - **验收后必做**：执行 `record-outcome.ps1 -SessionId <sid> -Outcome ok|redo|fail`。
 
 ---
 
-## 第 5 步：90 秒看门狗与 Cockpit 切号重连（必须遵守）
+## 第 5 步：35 秒阶段感知看门狗与 Cockpit 切号重连（告别黑盒盲等）
 
-每次通过 `run_command`（`WaitMsBeforeAsync=500`）在后台启动 `invoke-model.ps1`（或 `codex.exe`）后：
+每次通过 `run_command`（**`BypassSandbox=true`**, `WaitMsBeforeAsync=5000`）在后台启动 `invoke-model.ps1` 后：
 
-1. **立即挂载看门狗**：`schedule(DurationSeconds=90, TimerCondition="<TaskId>", Prompt="Inspect GPT background task (<TaskId>) status and log heartbeat; re-arm 90s timer if progressing, or kill and auto-reconnect if hung/failed.")`
-2. **被唤醒后**：执行 `manage_task(status)` 查看近期日志。
-   - 若任务已结束：
-     - `exit=0`：正常读取产出；若 `account_switched=true`，在《协同摘要》中简注“期间 Cockpit 自动切换账号并自愈成功”。
-     - `resume_invalidated=true`：说明 Cockpit 切号导致旧 `<sid>` 无法跨账号续跑，**立即去掉 `-Resume`**，将 `<scratch>` 中的阶段上下文内联进提示词重新发起新会话！
-     - `exit=4`（`quota_error=true`）：说明重试后账号池仍无可用额度，按 route 的 `fallback` 降级并告知用户。
-   - 若任务仍在运行但 90 秒无新输出：
-     1. 检查会话日志 `~\.codex\sessions\YYYY\MM\DD\rollout-*-<sid>.jsonl` 的 `LastWriteTime` 与子进程存活状态；
-     2. **【Cockpit 切号静默卡死特判】** 检查 `(Get-Item "$HOME\.codex\auth.json").LastWriteTime`（**严禁读取文件内容**）：若 `auth.json` 的修改时间**晚于**本后台任务的启动时间，且 `rollout` 已超过 60 秒无新写入，说明 Cockpit 切号导致旧连接静默断流卡死——**不要再等第二个 90 秒，立即判定中断并重连！**
-     3. 若 `auth.json` 未变且进程仍在正常推理，续挂 90 秒；连续两次检查（≥ 180 秒）均无任何进展，或卡在 `Reading additional input from stdin...`，判定为卡死。
-3. **判定卡死或切号静默中断后**：
-   1. 执行 `manage_task(kill)`，并**仅按 PID 清理本任务的进程树**（切勿按进程名通杀 `codex.exe`，以免误伤桌面端或其他会话）。
-   2. 若刚发生 Cockpit 切号，先确认 `~\.codex\.cockpit-profile-mutation-locks` 无最近几秒的活动锁（或稍等 5~10 秒）。
-   3. 自动重连（最多 3 次）：
-      - **未切号时**：优先用确切 `<sid>` 执行 `invoke-model.ps1 -Model gpt-6-astra -Resume <sid> ...`（拿不到 `<sid>` 且核对最新 rollout 的 cwd/时间匹配本任务时才用 `resume --last`）；
-      - **已发生 Cockpit 切号时**：对于只读审查或文本块交付任务，**直接不带 `-Resume` 在新账号重跑**（最稳，彻底避开旧账号加密推理块冲突）；对于必须续接的多轮任务，若带 `-Resume <sid>` 报 `resume_invalidated` 或立即失败，立刻切换为不带 `-Resume` 的新会话并内联 `<scratch>` 已存状态；
-      - 若发现 rollout 末条为工具调用卡死，重连提示词追加“不要调用任何工具，直接基于已有信息作答”；
-      - agy 通道：附带 `--conversation <id>` 续跑。
-   4. 为重连后的新任务重新挂载 90 秒看门狗。
-4. 连续 3 次重连均失败时：按 route 的 `fallback` 切换备用模型，并告知用户。
+1. **实时状态面板**：`invoke-model.ps1` 会实时刷新 `$HOME\.cowork\live\latest-codex.json`（或返回字段中的 `status_file`），包含当前阶段 `phase`（`connecting | connected | reasoning | tool_exec | responding | reconnecting | completed | failed`）、`proxy`、`elapsed_sec`、`reconnect_count`、`last_event_type`。
+2. **立即挂载 35 秒首检看门狗**（脚本本身已内置 25s 首包握手超时与 2 次重连风暴快断）：
+   `schedule(DurationSeconds=35, TimerCondition="<TaskId>", Prompt="Inspect GPT background task (<TaskId>) and read ~/.cowork/live/latest-codex.json phase; re-arm 60s timer if phase is reasoning/responding, or handle failure/reconnect immediately.")`
+3. **被唤醒后**：先读 `$HOME\.cowork\live\latest-codex.json` 与 `manage_task(status)`：
+   - **若任务已结束**：
+     - `exit=0`：正常读取产出；若 `account_switched=true`，在《协同摘要》简注“期间 Cockpit 自动切换账号并自愈成功”。
+     - `startup_timeout=true` 或 `reconnect_aborted=true`：说明 25 秒握手未通或流重连风暴已被脚本主动快断——先核对 `proxy` 端口是否通畅，若代理正常则重发 1 次或直接切 `fallback`，**绝不原地傻等**。
+     - `resume_invalidated=true`：**立即去掉 `-Resume`**，将 `<scratch>/plan_contract.md` 内联重新发起新会话！
+     - `exit=4`（`quota_error=true`）：按 route 的 `fallback` 降级并告知用户。
+   - **若任务仍在运行，按 `latest-codex.json` 的 `phase` 精准处置**：
+     1. **`phase == "reasoning"` 或 `"responding"`**：说明握手已完成、正在深度推理或生成文本！检查 `(Get-Item "$HOME\.codex\auth.json").LastWriteTime`（**严禁读取内容**）——若 `auth.json` 未在启动后发生变更，属于**正常思考**，续挂 **60 秒**看门狗安心等待；若 `auth.json` 已变更且 `updated_utc` 停滞超过 60 秒，说明切号断流，立即终止并重连。
+     2. **`phase == "tool_exec"` 且停滞 > 45 秒**：说明误入内部工具沙箱卡死——立即 `manage_task(kill)`，不带 `-AllowCodexShell` 重发（强制纯推理大脑模式）。
+4. **判定需人工终止并重连时**：
+   1. 执行 `manage_task(kill)` 并仅按 PID 清理进程树（切勿通杀 `codex.exe`）。
+   2. 自动重连（最多 2 次）：未切号用 `-Resume <sid>`；已切号直接去掉 `-Resume` 内联 `<scratch>/plan_contract.md` 新开会话。
+   3. 连续失败时立即切换 `fallback`（如 `gemini-4-carbon`）并告知用户。
 
 ---
 

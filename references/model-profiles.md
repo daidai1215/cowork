@@ -1,7 +1,7 @@
 # 主力模型优缺点与口碑档案（Model Profiles）
 
 <!-- AUTO:ROSTER:START -->
-> 自动同步自 `registry/models.json` (`registry_rev: 4`, 活跃模型: 3)
+> 自动同步自 `registry/models.json` (`registry_rev: 5`, 活跃模型: 3)
 
 | 模型 | ID / 通道 | 默认档位 | 顶级长板（>=9） | 额度 (`quota_rank`) | 速度 (`speed_rank`) | 运行特性 |
 |---|---|---|---|---|---|---|
@@ -22,9 +22,9 @@
 | 典型场景 | 标签 (`-Tags`) | 主执行 (`primary`) | 审查 (`reviewer`) | 润色 (`polisher`) | 协作模式 (`pattern`) |
 |---|---|---|---|---|---|
 | 前端页面 / 落地页 | `frontend,landing_page` | `gemini-4-carbon` | `claude-opus-5-5` | - | `aesthetic_gate` |
-| 后端 / API / 并发 | `backend,concurrency` | `gpt-6-astra` (`xhigh`) | `gemini-4-carbon` | - | `pipelined_review` |
+| 后端 / API / 并发 | `backend,concurrency` | `gpt-6-astra` | `gemini-4-carbon` | - | `pipelined_review` |
 | 数学推导 / 算法 | `math,algorithm` | `gpt-6-astra` (`xhigh`) | `gemini-4-carbon` | - | `pipelined_review` |
-| 疑难 Bug / 根因定位 | `bugfix` | `gpt-6-astra` (`xhigh`) | `gemini-4-carbon` | - | `pipelined_review` |
+| 疑难 Bug / 根因定位 | `bugfix` | `gpt-6-astra` | `gemini-4-carbon` | - | `pipelined_review` |
 | 论文 / 长文 / 文案 | `prose,paper` | `gemini-4-carbon` | `gpt-6-astra` | - | `pipelined_review` |
 | 配图 / 插画 / Mockup | `image_gen` | `gpt-6-astra` | `claude-opus-5-5` | - | `strength_delegation` |
 | PPT / Word / Excel | `office,ppt` | `gpt-6-astra` | `claude-opus-5-5` | - | `strength_delegation` |

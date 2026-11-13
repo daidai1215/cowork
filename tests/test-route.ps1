@@ -564,7 +564,7 @@ try {
         Set-OrchestraProperty $modesObj 'peak' ([pscustomobject]@{ lambda_q = 0.0; lambda_s = 0.0 })
         $polObj = Get-OrchestraProperty $peakRegistry 'policy'
         Set-OrchestraProperty $polObj 'default_mode' 'peak'
-        Set-OrchestraProperty $polObj 'peak_effort_tags' @('math', 'concurrency', 'algorithm', 'bugfix')
+        Set-OrchestraProperty $polObj 'peak_effort_tags' @('math')
         Set-OrchestraProperty $polObj 'dual_draft_tags' @('algorithm', 'concurrency', 'bugfix', 'math')
         $rigorModel = Get-RTestModel $peakRegistry 'syn-rigor'
         Set-OrchestraProperty $rigorModel.invoke 'efforts' @('low', 'medium', 'high', 'xhigh')
@@ -586,11 +586,21 @@ try {
             $defaultModeExec.exit_code -eq 0 -and
             $defaultPeakRes.mode -eq 'peak' -and
             $defaultPeakRes.primary -eq 'syn-rigor' -and
-            $defaultPeakRes.primary_effort -eq 'xhigh' -and
+            $defaultPeakRes.primary_effort -eq 'high' -and
             $defaultPeakRes.orchestration.replan_circuit_breaker -eq $true -and
             $defaultPeakRes.orchestration.dual_draft_eligible -eq $true -and
             $defaultPeakRes.orchestration.co_drafter -eq 'syn-prose'
-        ) 'default peak mode selects highest raw cap with xhigh boost and co_drafter on bugfix'
+        ) 'default peak mode selects highest raw cap at fast high effort on routine bugfix'
+
+        $mathPeakRun = Invoke-RTest 'math' -ModeName 'peak'
+        $escalatedBugfixRun = Invoke-RTest 'bugfix' -ModeName 'peak' -Escalate
+        Assert-RTest (
+            $mathPeakRun.Exit -eq 0 -and
+            $mathPeakRun.Result.primary -eq 'syn-rigor' -and
+            $mathPeakRun.Result.primary_effort -eq 'xhigh' -and
+            $escalatedBugfixRun.Exit -eq 0 -and
+            $escalatedBugfixRun.Result.primary_effort -eq 'xhigh'
+        ) 'math tag or -AllowEscalation boosts rigor primary_effort to xhigh'
 
         $balancedBugfix = Invoke-RTest 'bugfix' -ModeName 'balanced'
         Assert-RTest (

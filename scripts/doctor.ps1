@@ -269,9 +269,18 @@ try {
 
     $codexOverrideSet = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_CODEX'))
     if ($ProbeCodexShell -and $codexOk -and (-not $NoNetwork -or $codexOverrideSet)) {
+        $probeProxyEnv = @{}
+        $sysProxy = Get-OrchestraSystemProxy
+        if (-not [string]::IsNullOrWhiteSpace([string]$sysProxy.proxy)) {
+            $probeProxyEnv['HTTP_PROXY'] = [string]$sysProxy.proxy
+            $probeProxyEnv['HTTPS_PROXY'] = [string]$sysProxy.proxy
+            $probeProxyEnv['ALL_PROXY'] = [string]$sysProxy.proxy
+            $probeProxyEnv['NO_PROXY'] = 'localhost,127.0.0.1,::1'
+        }
         $probeRun = Invoke-OrchestraProcess -FilePath $codexPath -Arguments @(
-            'exec', '--json', '-s', 'read-only', '--skip-git-repo-check', '-C', $paths.Root, '-'
-        ) -InputText 'Run a shell command that prints COWORK_SHELL_OK and reply with COWORK_SHELL_OK.' -WorkDir $paths.Root -TimeoutSec 8 -CaptureStdout
+            'exec', '--json', '-s', 'read-only', '--disable', 'unbounded_connection_retries',
+            '--skip-git-repo-check', '-C', $paths.Root, '-'
+        ) -InputText 'Run a shell command that prints COWORK_SHELL_OK and reply with COWORK_SHELL_OK.' -WorkDir $paths.Root -TimeoutSec 15 -StartupTimeoutSec 10 -Environment $probeProxyEnv -CaptureStdout
         $hasShellToolMarker = $false
         foreach ($rawLine in @($probeRun.stdout)) {
             if ([string]::IsNullOrWhiteSpace([string]$rawLine)) { continue }

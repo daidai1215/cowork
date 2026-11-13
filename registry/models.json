@@ -164,7 +164,7 @@
     "escalate_after_failures": 2,
     "default_mode": "peak",
     "default_effort": "high",
-    "peak_effort_tags": ["math", "concurrency", "algorithm", "bugfix"],
+    "peak_effort_tags": ["math"],
     "dual_draft_tags": ["algorithm", "concurrency", "bugfix", "math"],
     "usage_compact_bytes": 2097152,
     "usage_retain_days": 90,
@@ -190,7 +190,9 @@
         "account_rotation": true,
         "rotation_max_retries": 2,
         "rotation_wait_sec": 10,
-        "exhausted_minutes": 30
+        "exhausted_minutes": 30,
+        "connect_timeout_sec": 25,
+        "reconnect_abort_count": 2
       },
       "tools": ["image_gen", "office_plugins", "latex", "browser", "computer_use"],
       "quota_rank": 2,
@@ -476,6 +478,6 @@
       ]
     }
   ],
-  "registry_rev": 4,
-  "updated": "2026-11-13T01:05:00.0000000Z"
+  "registry_rev": 5,
+  "updated": "2026-11-13T03:12:00.0000000Z"
 }

@@ -1,5 +1,12 @@
 # Cowork changelog
 
+## 2026-11-13T03:12:00.0000000Z - Codex fast-connect, proxy auto-injection, pure-brain mode, and phase heartbeat
+- registry_rev: 4 -> 5
+- narrowed `policy.peak_effort_tags` to `["math"]` so routine `bugfix`/`concurrency`/`algorithm` run at fast `high` effort (with `-AllowEscalation` boosting to `xhigh`)
+- added `connect_timeout_sec=25` and `reconnect_abort_count=2` to `gpt-6-astra.invoke`
+- disabled `unbounded_connection_retries` and default `shell_tool`/`unified_exec` on read-only/pure-brain Codex runs, with dynamic Windows `HKCU` proxy injection, 1.2s local proxy TCP fast pre-check, and `~/.cowork/live/` status heartbeat
+- backup: registry/history/models-20261113-111200-4-fast-codex.json
+
 ## 2026-11-13T01:05:00.0000000Z - Performance-first orchestration upgrade (Orchestrator principles)
 - registry_rev: 3 -> 4
 - added mode `peak` (`lambda_q=0.0, lambda_s=0.0`) as `policy.default_mode`
