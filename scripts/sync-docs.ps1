@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 Synchronize or verify managed roster and routing blocks across cowork docs.
 .DESCRIPTION
@@ -234,6 +234,77 @@ function Build-RoutingBlock {
     return ($lines.ToArray() -join "`n")
 }
 
+function Build-ProfilesBlock {
+    param($Registry)
+    $dimensions = @(Get-OrchestraArray $Registry 'cap_dimensions')
+    $active = @(
+        @(Get-OrchestraArray $Registry 'models') |
+            Where-Object { [string](Get-OrchestraProperty $_ 'status') -eq 'active' }
+    )
+    $lines = New-Object 'System.Collections.Generic.List[string]'
+    $idx = 0
+    foreach ($model in $active) {
+        $idx++
+        if ($idx -gt 1) {
+            [void]$lines.Add('')
+            [void]$lines.Add('---')
+            [void]$lines.Add('')
+        }
+        $id = [string](Get-OrchestraProperty $model 'id')
+        $display = [string](Get-OrchestraProperty $model 'display_name' $id)
+        $vendor = [string](Get-OrchestraProperty $model 'vendor' 'unknown')
+        $channel = [string](Get-OrchestraProperty $model 'channel' 'agy')
+        $invoke = Get-OrchestraProperty $model 'invoke'
+        $effort = [string](Get-OrchestraProperty $invoke 'default_effort' 'high')
+        $peakEffort = [string](Get-OrchestraProperty $invoke 'peak_effort' '')
+        $effortTag = if (-not [string]::IsNullOrWhiteSpace($peakEffort) -and $peakEffort -cne $effort) {
+            ('`{0}` / ' + (U '\u653b\u575a') + ' `{1}`') -f $effort, $peakEffort
+        }
+        else {
+            '`{0}`' -f $effort
+        }
+        $qRank = [int](Get-OrchestraProperty $model 'quota_rank' 2)
+        $sRank = [int](Get-OrchestraProperty $model 'speed_rank' 2)
+        $roleNote = if ([bool](Get-OrchestraProperty $model 'primary_disabled' $false)) {
+            ' | ' + (U '\u4ec5\u5ba1\u67e5/\u628a\u5173\uff08\u7981\u4e3b\u5199\uff09')
+        }
+        else { '' }
+
+        [void]$lines.Add(('## {0}. {1} ({2}) -- `{3}` / `{4}`{5}' -f $idx, $display, $effortTag, $vendor, $channel, $roleNote))
+        [void]$lines.Add('')
+
+        $capsObj = Get-OrchestraProperty $model 'caps'
+        $scoreItems = New-Object 'System.Collections.Generic.List[string]'
+        foreach ($dim in $dimensions) {
+            $capEntry = Get-OrchestraProperty $capsObj ([string]$dim)
+            if ($null -eq $capEntry) { continue }
+            $sc = [double](Get-OrchestraProperty $capEntry 'score' 0)
+            $lk = if ([bool](Get-OrchestraProperty $capEntry 'locked' $false)) { '*' } else { '' }
+            [void]$scoreItems.Add(('`{0}`: {1}{2}' -f $dim, $sc, $lk))
+        }
+        [void]$lines.Add(('- **' + (U '10 \u7ef4\u80fd\u529b\u5206') + '** (`*`=' + (U '\u9501\u5b9a') + '): ' + ($scoreItems -join ', ')))
+        [void]$lines.Add(('- **' + (U '\u989d\u5ea6 / \u901f\u5ea6') + '**: `quota_rank=' + (Format-RankLabel $qRank 'quota') + '`, `speed_rank=' + (Format-RankLabel $sRank 'speed') + '`'))
+
+        $strengths = @(Get-OrchestraArray $model 'strengths')
+        if ($strengths.Count -gt 0) {
+            [void]$lines.Add('')
+            [void]$lines.Add(('**' + (U '\u6838\u5fc3\u957f\u677f') + '**:'))
+            foreach ($s in $strengths) {
+                [void]$lines.Add(('- ' + [string]$s))
+            }
+        }
+        $weaknesses = @(Get-OrchestraArray $model 'weaknesses')
+        if ($weaknesses.Count -gt 0) {
+            [void]$lines.Add('')
+            [void]$lines.Add(('**' + (U '\u77ed\u677f\u4e0e\u907f\u5751') + '**:'))
+            foreach ($w in $weaknesses) {
+                [void]$lines.Add(('- ' + [string]$w))
+            }
+        }
+    }
+    return ($lines.ToArray() -join "`n")
+}
+
 function Update-ManagedSection {
     param(
         [string]$Content,
@@ -296,6 +367,7 @@ try {
 
     $rosterBlock = Build-RosterBlock -Registry $registry
     $routingBlock = Build-RoutingBlock -Registry $registry -RouteScript $routeScript -RegistryFile $paths.Registry -EmptyStateDir $tempStateDir
+    $profilesBlock = Build-ProfilesBlock -Registry $registry
 
     $relativeDocs = @(
         'SKILL.md',
@@ -329,14 +401,24 @@ try {
             [void]$details.Add([pscustomobject]@{ file = $rel; status = 'missing_marker'; detail = $step2.reason })
             continue
         }
+        $finalDocContent = $step2.content
+        if ($original.Contains('<!-- AUTO:PROFILES:START -->')) {
+            $step3 = Update-ManagedSection -Content $finalDocContent -MarkerName 'PROFILES' -NewInner $profilesBlock -Newline $newline
+            if (-not $step3.ok) {
+                [void]$drifted.Add($rel)
+                [void]$details.Add([pscustomobject]@{ file = $rel; status = 'missing_marker'; detail = $step3.reason })
+                continue
+            }
+            $finalDocContent = $step3.content
+        }
 
-        if ($step2.content -cne $original) {
+        if ($finalDocContent -cne $original) {
             [void]$drifted.Add($rel)
             if ($Check) {
                 [void]$details.Add([pscustomobject]@{ file = $rel; status = 'drift'; detail = 'Managed block differs from models.json.' })
             }
             else {
-                Write-DocAtomic -Path $fullPath -Text $step2.content
+                Write-DocAtomic -Path $fullPath -Text $finalDocContent
                 [void]$updatedFiles.Add($rel)
                 [void]$details.Add([pscustomobject]@{ file = $rel; status = 'updated'; detail = 'Synchronized managed blocks.' })
             }

@@ -191,8 +191,10 @@ extract-files.ps1 -InputFile <f> -Root <d> -AllowedPrefixes <p1,p2> [-ForbiddenP
 
 ---
 
-## 第 7 步：自我维护与自我升级（doctor / calibrate / maintain）
+## 第 7 步：初始安装选型、自我维护与自我升级（setup / doctor / calibrate / maintain）
 
+- **安装选型与更换默认主力阵容**：`setup.ps1 [-ListAvailable] [-Interactive] [-Models <m1,m2,...>] [-ReviewOnlyModels <r1,...>] [-Evaluate auto|research|probe|full|none] [-ForceEvaluate]`
+  - 当用户首次部署 `cowork` 或要求更换默认参与调度的模型组合时：先跑 `setup.ps1 -ListAvailable` 列出本机 `agy` 与 `Codex` 实测可用的全部模型，请用户选择默认激活的主力模型（支持简写如 `carbon,astra,opus5.5` 或其他任意模型）及是否设仅审查保护模型；选定后执行 `setup.ps1 -Models ... -Evaluate <auto|research|probe|full>` 自动建档、把未选存量模型记入 `baseline_slugs`、对新选模型执行 10 维联网基准调研 + 异构审查（及可选 5 题实测盲评）、重绑 `best-*` 能力别名并同步全套文档。
 - **一键自检与修复**：`doctor.ps1 [-Repair] [-ProbeCodexShell] [-NoNetwork]`（检查双端 Junction、文档漂移、过期租约、调用 `outcome` 回填率及新版 Codex 非交互 shell 自愈探测）。
 - **遥测自校准提案**：`calibrate-telemetry.ps1 [-WindowDays 30] [-DryRun]`（聚合近 30 天真实返工率、实测耗时反转与切号健康度，生成待批提案至 `registry/proposals/`，绝不直接改线上分数）。
 - **去剧透实测与手动盲评**：`probe-model.ps1 -ModelId <id> [-Grade] [-EmitProposals]`（仅在手动指定时运行；发给被测模型前自动剥离 `Scoring by ...` 评分细则防剧透，`-Grade` 时强制选异构厂商评委匿名盲评并本地核算封顶）。

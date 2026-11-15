@@ -52,6 +52,7 @@ cowork/
 │   ├── collaboration-patterns.md     # 6 种协作模式（含只读契约、Re-plan if 熔断、分片并行、双旗舰竞标）与模板
 │   └── research-protocol.md          # 新模型自动调研与异构交叉核验协议
 ├── scripts/
+│   ├── setup.ps1                     # 安装引导与阵容切换器（扫描本机模型 → 自选默认主力/仅审查模型 → 自动评估 10 维性能并同步文档）
 │   ├── route.ps1                     # 按标签与模式（默认 peak 零税冲上限，支持自动升 xhigh 与双旗舰竞标）自动派工
 │   ├── invoke-model.ps1              # 统一跨通道调用入口（含自动升档、Re-plan 熔断检测、Cockpit 自动切号等待与重试）
 │   ├── detect-models.ps1             # 自动扫描 agy 与 Codex 目录发现新模型 / 离线模型
@@ -71,20 +72,32 @@ cowork/
 └── tests/                            # 离线回归测试（apply / detect / invoke / maintain / probe / route）
 ```
 
-## 安装与双端同步（Windows PowerShell）
+## 安装、自选默认模型与性能评估（Windows PowerShell）
 
 1. 将本仓库克隆至 Antigravity 全局技能目录：
    ```powershell
    git clone https://github.com/daidai1215/cowork.git "$HOME\.gemini\config\skills\cowork"
    ```
-2. 同步创建 Codex CLI 端的 Junction（使 Antigravity 与 Codex 共享同一份技能与档案）：
-   ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\.gemini\config\skills\cowork\scripts\sync-to-codex.ps1"
-   ```
-3. 确保本机已配置：
-   - OpenAI Codex CLI（`>= 0.153.0`）
-   - Antigravity CLI 包装脚本 `$HOME\.gemini\bin\agy-exec.ps1`（或通过环境变量 `MODEL_ORCHESTRA_AGY_WRAPPER` 指定路径）
-   - 运行时状态默认保存在 `$HOME\.cowork\`（含 `state.json` 与 `usage.jsonl`，与仓库代码隔离，不会污染 Git 工作区）
+2. 运行安装引导器 `setup.ps1`（自动创建 `~/.codex/skills/cowork` Junction、扫描本机 `agy` + `Codex` 全部可用模型、让你自选默认主力阵容，并在选定后自动评估各模型性能、重绑 `best-*` 别名与同步文档）：
+   - **交互式菜单自选**：
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\.gemini\config\skills\cowork\scripts\setup.ps1" -Interactive
+     ```
+   - **命令行简写直选（例如选 `carbon, astra, opus5.5`，并将 `opus5.5` 设为仅把关禁主写）**：
+     ```powershell
+     powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\.gemini\config\skills\cowork\scripts\setup.ps1" -Models carbon,astra,opus5.5 -ReviewOnlyModels opus5.5 -Evaluate auto
+     ```
+   - **切换为其他任意本机模型并在选定后全面评估性能**（支持 `-Evaluate auto|research|probe|full|none` 与 `-ForceEvaluate`）：
+     ```powershell
+     # 先查看本机检测到的全部可选模型列表：
+     powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\.gemini\config\skills\cowork\scripts\setup.ps1" -ListAvailable
+
+     # 选定新组合（如 hydrogen + sonnet5.5 + astra）并立即执行 10 维联网调研 + 5 题异构盲评实测：
+     powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\.gemini\config\skills\cowork\scripts\setup.ps1" -Models hydrogen,sonnet5.5,astra -Evaluate full
+     ```
+3. 前置环境要求：
+   - OpenAI Codex CLI（`>= 0.153.0`）与/或 Antigravity CLI 包装脚本 `$HOME\.gemini\bin\agy-exec.ps1`（或环境变量 `MODEL_ORCHESTRA_AGY_WRAPPER`）
+   - 运行时状态默认保存在 `$HOME\.cowork\`（含 `state.json`、`live/` 与 `usage.jsonl`，与仓库代码隔离，不会污染 Git 工作区）
 
 ## 运行离线自测
 
