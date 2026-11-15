@@ -134,7 +134,10 @@ detect-models.ps1          # 24 小时内已扫描过会直接返回 {"skipped":
 **性能、隔离与并发铁律**：
 - **无冲突分片并行（Disjoint Sharding）**：多模块任务拆为互不重叠的路径分片，每个后台会话绑定独立的 `-AllowedPrefixes` 与 `-ForbiddenPrefixes`；`extract-files.ps1` 执行全或无原子校验（任一文件越界则整批零写入退出 `2`）。
 - **读写职责隔离（Active Verifier）**：审查者绝不直接修改作者文件，但必须通过实跑测试、脚本验算或权威检索给出可证伪结论。
-- **阶段契约必落盘**：`plan_contract.md`、预审结论、分片审稿意见一律写入 `<scratch>/*.md`，确保 Cockpit 随时切换 Astra 账号导致旧会话失效时，新会话读取契约即可零损续接。
+- **主控两级防污染铁律（Context Hygiene & Clean Handoff，详见 `references/collaboration-patterns.md` 第 7 节）**：
+  1. **盘中排障 1 次上限 → 子智能体隔离**：主控遇到非业务主线的工具/环境/脚本错误，本地顺手修复**最多 1 次**；若失败或需多步诊断、修改工具/依赖，**严禁在主对话继续试错**（`/compact` 仍会残留 `Errors & Fixes` 排障摘要）！Antigravity 主控立即调 `invoke_subagent(TypeName="self", Role="Tooling Debugger", ...)`（Codex 主控拉起不带 `-Resume` 的独立子会话）隔离排障，仅向主上下文回传四项干净回执：**`状态 | 变更文件 | 验证证据 | 残留环境约束`**。
+  2. **阶段边界纯状态交接 + 换新对话**：在大阶段切换点（如“工具改造/探路结束 → 进入正式业务实现”且有可验证检查点），或一次状态重述后仍再次遗漏硬约束、重复已否定路线时，登记完工作区修改与在途任务后生成 `<scratch>/handoff.md`（按模板 E 做纯状态投影：严禁抄入 `stderr` 与排障流水账；业务死胡同按 `方法—失败前提—证据—何时可重试` 四元组保留），提示用户开新对话并在新会话首轮先核验交接状态。
+- **阶段契约必落盘**：`plan_contract.md`、`handoff.md`、预审结论、分片审稿意见一律写入 `<scratch>/*.md`，确保切换新对话或 Cockpit 切号后均可零损续接。
 - 后台外部调用一律异步并行推进，主控在同一回合内继续执行无冲突任务。
 
 ---
