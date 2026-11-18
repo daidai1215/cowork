@@ -1,5 +1,18 @@
 # Cowork changelog
 
+## 2026-11-18T08:40:00.0000000Z - Upgrade gpt-6-astra -> gpt-6.2-astra, add gemini-4-hydrogen (4H Extra / fast_4h tier), and Swarm cowork bridge
+- registry_rev: 6 -> 7
+- replaced `gpt-6-astra` (`retired`) with evaluated `gpt-6.2-astra` (`active`, `high` / peak `xhigh`, `aliases` rebound: `best-rigor`, `best-math`, `best-image`)
+- added `gemini-4-hydrogen` (`4H Extra`, default `xhigh`, `speed_rank=3`, `quota_rank=3`, `escalate_to=gemini-4-carbon`) and calibrated `gemini-4-carbon` (`speed_rank=2`)
+- added mode `fast_4h` (`lambda_q=0.0, lambda_s=0.2`) and `policy.fast_workhorse_map` offloading routine Carbon tasks to 4H Extra while reserving Carbon for high-bar `paper`/`essay`/`copywriting`, `math`/`algorithm` verification, and `-AllowEscalation`
+- backup: registry/history/models-20261118-164000-6-pre62h.json
+
+## 2026-11-18T07:55:57.2789440Z - Roster setup: gemini-4-carbon, gpt-6.2-astra, claude-opus-5-5
+- registry_rev: 5 -> 6
+- active models: gemini-4-carbon, gpt-6.2-astra, claude-opus-5-5
+- review-only models: claude-opus-5-5
+- backup: registry/history/models-20261118-075557-5-setup.json
+
 ## 2026-11-13T03:12:00.0000000Z - Codex fast-connect, proxy auto-injection, pure-brain mode, and phase heartbeat
 - registry_rev: 4 -> 5
 - narrowed `policy.peak_effort_tags` to `["math"]` so routine `bugfix`/`concurrency`/`algorithm` run at fast `high` effort (with `-AllowEscalation` boosting to `xhigh`)

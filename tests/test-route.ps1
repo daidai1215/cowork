@@ -295,10 +295,20 @@ try {
 
     foreach ($profile in $activeModels) {
         $profId = [string]$profile.id
+        $profTier = [string](Get-OrchestraProperty $profile 'tier' 'flagship')
+        $profDefault = [string]$profile.invoke.default_effort
+        $profSupported = @(Get-OrchestraArray $profile.invoke 'efforts' | ForEach-Object { [string]$_ })
+        $validEffort = (
+            ($profSupported -contains $profDefault) -and
+            (
+                ($profDefault -eq $expectedEffort) -or
+                ($profTier -eq 'fast' -and $profDefault -eq 'xhigh')
+            )
+        )
         Assert-RTest (
-            [string]$profile.invoke.default_effort -eq $expectedEffort -and
+            $validEffort -and
             -not [bool](Get-OrchestraProperty $profile 'escalation_only' $false)
-        ) "active model $profId defaults to $expectedEffort effort without escalation_only"
+        ) "active model $profId declares valid default effort ($profDefault) without escalation_only"
 
         if ([string]$profile.channel -eq 'codex' -and [bool](Get-OrchestraProperty $profile.invoke 'account_rotation' $false)) {
             Assert-RTest (
@@ -616,6 +626,100 @@ try {
             $opusGuardRun.Result.primary -eq 'syn-prose' -and
             @($opusGuardRun.Result.fallback) -notcontains 'syn-aesthetic'
         ) 'primary_disabled prevents aesthetic model from becoming primary even when rigor is exhausted'
+
+        # 9. fast_4h tier offload: 4H Extra (xhigh) absorbs routine Carbon tasks while high-bar & escalation retain Carbon
+        Set-RTestExhaustion
+        $fastRegistry = Copy-RTestFixture $synBase
+        $fastModes = Get-OrchestraProperty $fastRegistry 'modes'
+        Set-OrchestraProperty $fastModes 'fast_4h' ([pscustomobject]@{ lambda_q = 0.0; lambda_s = 0.2 })
+        $fastPolicy = Get-OrchestraProperty $fastRegistry 'policy'
+        Set-OrchestraProperty $fastPolicy 'dual_draft_tags' @('algorithm', 'concurrency', 'bugfix', 'math')
+        Set-OrchestraProperty $fastPolicy 'fast_workhorse_map' ([pscustomobject]@{
+            from_model = 'syn-prose'
+            to_model = 'syn-fast'
+            retain_primary_tags = @('paper', 'essay', 'copywriting')
+            retain_reviewer_tags = @('math', 'algorithm')
+            retain_polisher_tags = @('paper', 'essay', 'copywriting')
+        })
+        $synFastModel = Copy-RTestFixture (Get-RTestModel $fastRegistry 'syn-prose')
+        Set-OrchestraProperty $synFastModel 'id' 'syn-fast'
+        Set-OrchestraProperty $synFastModel 'display_name' 'Synthetic Fast 4H'
+        Set-OrchestraProperty $synFastModel 'quota_rank' 3
+        Set-OrchestraProperty $synFastModel 'speed_rank' 3
+        Set-OrchestraProperty $synFastModel 'escalate_to' 'syn-prose'
+        Set-OrchestraProperty $synFastModel.invoke 'model_flag' 'syn-fast-{effort}'
+        Set-OrchestraProperty $synFastModel.invoke 'default_effort' 'xhigh'
+        Set-OrchestraProperty $synFastModel.invoke 'efforts' @('low', 'medium', 'high', 'xhigh')
+        Set-RTestScore $synFastModel 'code_rigor' 8.0
+        Set-RTestScore $synFastModel 'backend' 8.0
+        Set-RTestScore $synFastModel 'math' 8.0
+        Set-RTestScore $synFastModel 'frontend_aesthetic' 7.5
+        Set-RTestScore $synFastModel 'prose' 8.0
+        Set-RTestScore $synFastModel 'world_knowledge' 8.5
+        Set-RTestScore $synFastModel 'long_context' 9.5
+        Set-RTestScore $synFastModel 'agentic_coding' 8.5
+        $synProseRef = Get-RTestModel $fastRegistry 'syn-prose'
+        Set-OrchestraProperty $synProseRef 'speed_rank' 2
+        $synAestheticFastRef = Get-RTestModel $fastRegistry 'syn-aesthetic'
+        # Mirror production aesthetic-gate reservation so bugfix co-drafting tests the Carbon -> 4H offload path.
+        Set-OrchestraProperty $synAestheticFastRef 'primary_disabled' $true
+        $synRigorFastRef = Get-RTestModel $fastRegistry 'syn-rigor'
+        Set-OrchestraProperty $synRigorFastRef.invoke 'efforts' @('low', 'medium', 'high', 'xhigh')
+        Set-OrchestraProperty $synRigorFastRef.invoke 'peak_effort' 'xhigh'
+        Set-OrchestraProperty $fastRegistry 'models' (@($fastRegistry.models) + @($synFastModel))
+        Save-RTestFixture $fastRegistry
+
+        $fastFrontend = Invoke-RTest 'frontend,landing_page' -ModeName 'fast_4h'
+        $fastResearch = Invoke-RTest 'research,long_context' -ModeName 'fast_4h'
+        $fastPaper = Invoke-RTest 'prose,paper' -ModeName 'fast_4h'
+        $fastBugfix = Invoke-RTest 'bugfix' -ModeName 'fast_4h'
+        $fastMath = Invoke-RTest 'math,algorithm' -ModeName 'fast_4h'
+        $fastEscResearch = Invoke-RTest 'research,long_context' -ModeName 'fast_4h' -Escalate
+        $fastSwitchExec = Invoke-OrchestraProcess -FilePath $engine -Arguments @(
+            '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+            '-File', (Join-Path $root 'scripts\route.ps1'),
+            '-RegistryPath', $script:routePaths.Registry,
+            '-StateDir', $script:routePaths.StateDir,
+            '-Tags', 'prose', '-Fast4H'
+        ) -WorkDir $temp -TimeoutSec 60 -CaptureStdout
+        $fastSwitchRes = [string](@($fastSwitchExec.stdout | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })[0]) | ConvertFrom-Json
+
+        Assert-RTest (
+            $fastFrontend.Exit -eq 0 -and
+            $fastFrontend.Result.primary -eq 'syn-fast' -and
+            $fastFrontend.Result.primary_effort -eq 'xhigh' -and
+            $fastFrontend.Result.reviewer -eq 'syn-aesthetic' -and
+            $fastFrontend.Result.escalate_to -eq 'syn-prose' -and
+            $null -eq $fastFrontend.Result.polisher -and
+            [bool]$fastFrontend.Result.orchestration.fast_tier_offload -eq $true
+        ) 'fast_4h offloads routine frontend draft to 4H Extra while keeping aesthetic gate'
+
+        Assert-RTest (
+            $fastResearch.Exit -eq 0 -and
+            $fastResearch.Result.primary -eq 'syn-fast' -and
+            $fastResearch.Result.primary_effort -eq 'xhigh' -and
+            $fastSwitchExec.exit_code -eq 0 -and
+            $fastSwitchRes.mode -eq 'fast_4h' -and
+            $fastSwitchRes.primary -eq 'syn-fast'
+        ) 'fast_4h and -Fast4H switch offload routine research and prose to 4H Extra'
+
+        Assert-RTest (
+            $fastPaper.Exit -eq 0 -and
+            $fastPaper.Result.primary -eq 'syn-prose' -and
+            $fastEscResearch.Exit -eq 0 -and
+            $fastEscResearch.Result.primary -eq 'syn-prose'
+        ) 'fast_4h retains Carbon for high-bar paper and AllowEscalation tasks'
+
+        Assert-RTest (
+            $fastBugfix.Exit -eq 0 -and
+            $fastBugfix.Result.primary -eq 'syn-rigor' -and
+            $fastBugfix.Result.reviewer -eq 'syn-fast' -and
+            $fastBugfix.Result.orchestration.co_drafter -eq 'syn-fast' -and
+            $fastMath.Exit -eq 0 -and
+            $fastMath.Result.primary -eq 'syn-rigor' -and
+            $fastMath.Result.primary_effort -eq 'xhigh' -and
+            $fastMath.Result.reviewer -eq 'syn-prose'
+        ) 'fast_4h keeps rigor primary while offloading routine bugfix review to 4H and math review to Carbon'
     }
     finally {
         Save-RTestFixture $fixture

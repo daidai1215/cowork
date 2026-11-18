@@ -27,13 +27,19 @@ function Invoke-CleanRoute {
         [string]$RouteScript,
         [string]$TagsCsv,
         [string]$RegistryFile,
-        [string]$EmptyStateDir
+        [string]$EmptyStateDir,
+        [string]$ModeName = ''
     )
     $savedOut = [Console]::Out
     $writer = New-Object IO.StringWriter
     [Console]::SetOut($writer)
     try {
-        & $RouteScript -Tags $TagsCsv -RegistryPath $RegistryFile -StateDir $EmptyStateDir
+        if ([string]::IsNullOrWhiteSpace($ModeName)) {
+            & $RouteScript -Tags $TagsCsv -RegistryPath $RegistryFile -StateDir $EmptyStateDir
+        }
+        else {
+            & $RouteScript -Tags $TagsCsv -Mode $ModeName -RegistryPath $RegistryFile -StateDir $EmptyStateDir
+        }
     }
     finally {
         [Console]::SetOut($savedOut)
@@ -230,6 +236,55 @@ function Build-RoutingBlock {
             '| {0} | `{1}` | {2} | {3} | {4} | {5} |' -f
             $sc.label, $sc.tags, $primaryCell, $reviewerCell, $polisherCell, $patternCell
         ))
+    }
+
+    $modesObj = Get-OrchestraProperty $Registry 'modes'
+    $fastMapObj = Get-OrchestraProperty $policyObj 'fast_workhorse_map'
+    if ($null -ne (Get-OrchestraProperty $modesObj 'fast_4h') -and $null -ne $fastMapObj) {
+        $toM = [string](Get-OrchestraProperty $fastMapObj 'to_model' 'gemini-4-hydrogen')
+        $fromM = [string](Get-OrchestraProperty $fastMapObj 'from_model' 'gemini-4-carbon')
+        $retainP = @(Get-OrchestraArray $fastMapObj 'retain_primary_tags' | ForEach-Object { [string]$_ }) -join '`, `'
+        $retainR = @(Get-OrchestraArray $fastMapObj 'retain_reviewer_tags' | ForEach-Object { [string]$_ }) -join '`, `'
+        [void]$lines.Add('')
+        [void]$lines.Add((
+            '- **' + (U '4H Extra \u5feb\u901f\u6a21\u5f0f (`-Mode fast_4h`)') + '**: ' +
+            (U '\u5c06\u5927\u90e8\u5206') + ' `' + $fromM + '` ' + (U '\u4efb\u52a1\u4e0b\u653e') + ' `' + $toM + '` (`xhigh`)' +
+            (U '\uff0c\u4ec5\u9ad8\u8981\u6c42\u4e3b\u5199') + ' (`' + $retainP + '`), ' +
+            (U '\u9ad8\u8981\u6c42\u5ba1\u67e5') + ' (`' + $retainR + '`) ' + (U '\u53ca') + ' `-AllowEscalation` ' +
+            (U '\u4fdd\u7559\u7ed9') + ' `' + $fromM + '` (' + (U '\u540e\u7aef/\u6570\u5b66/\u751f\u56fe/Office \u4e3b\u653b\u4ecd\u7531 GPT-6.2 Astra \u627f\u62c5') + '):'
+        ))
+        [void]$lines.Add('')
+        [void]$lines.Add((
+            '| ' + (U '\u5feb\u901f\u573a\u666f') + ' (`fast_4h`) | `' + '-Tags' + '` | ' +
+            (U '\u4e3b\u6267\u884c') + ' | ' + (U '\u5ba1\u67e5') + ' | ' +
+            (U '\u5347\u7ea7\u515c\u5e95') + ' |'
+        ))
+        [void]$lines.Add('|---|---|---|---|---|')
+        $fastScenarios = @(
+            [pscustomobject]@{ label = (U '\u524d\u7aef / UI / \u843d\u5730\u9875'); tags = 'frontend,landing_page' }
+            [pscustomobject]@{ label = (U '\u68c0\u7d22 / \u5927\u4ed3\u5e93\u9884\u8bfb'); tags = 'research,long_context' }
+            [pscustomobject]@{ label = (U '\u65e5\u5e38\u6587\u6863 / \u603b\u7ed3'); tags = 'prose' }
+            [pscustomobject]@{ label = (U '\u9ad8\u8981\u6c42\u8bba\u6587 / \u6df1\u5ea6\u957f\u6587'); tags = 'prose,paper' }
+            [pscustomobject]@{ label = (U '\u5e38\u89c4\u540e\u7aef / Bugfix'); tags = 'bugfix' }
+            [pscustomobject]@{ label = (U '\u6570\u5b66 / \u7b97\u6cd5\u9a8c\u7b97'); tags = 'math,algorithm' }
+        )
+        foreach ($fsc in $fastScenarios) {
+            $fr = Invoke-CleanRoute -RouteScript $RouteScript -TagsCsv $fsc.tags -ModeName 'fast_4h' -RegistryFile $RegistryFile -EmptyStateDir $EmptyStateDir
+            $fpEff = [string](Get-OrchestraProperty $fr 'primary_effort' '')
+            $fpCell = if ([bool](Get-OrchestraProperty $fr 'blocked' $false) -or $null -eq $fr.primary) {
+                'BLOCKED'
+            }
+            elseif ($fpEff) {
+                '`{0}` (`{1}`)' -f [string]$fr.primary, $fpEff
+            }
+            else {
+                '`' + [string]$fr.primary + '`'
+            }
+            $frEff = [string](Get-OrchestraProperty $fr 'reviewer_effort' '')
+            $frCell = if ($null -eq $fr.reviewer) { '-' } elseif ($frEff) { '`{0}` (`{1}`)' -f [string]$fr.reviewer, $frEff } else { '`' + [string]$fr.reviewer + '`' }
+            $feCell = if ($null -eq $fr.escalate_to) { '-' } else { '`' + [string]$fr.escalate_to + '`' }
+            [void]$lines.Add(('| {0} | `{1}` | {2} | {3} | {4} |' -f $fsc.label, $fsc.tags, $fpCell, $frCell, $feCell))
+        }
     }
     return ($lines.ToArray() -join "`n")
 }

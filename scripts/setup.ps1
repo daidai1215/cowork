@@ -358,6 +358,17 @@ function Resolve-CatalogToken {
             ((Normalize-ModelToken ([string]$_.display_name)).Contains($norm))
         }
     )
+    if ($substrHits.Count -eq 0) {
+        $strippedNorm = $norm -replace '(?:extra|xhigh|high|medium|low|max)$', ''
+        if (-not [string]::IsNullOrWhiteSpace($strippedNorm) -and $strippedNorm -cne $norm) {
+            $substrHits = @(
+                $CatalogItems | Where-Object {
+                    ((Normalize-ModelToken ([string]$_.id)).Contains($strippedNorm)) -or
+                    ((Normalize-ModelToken ([string]$_.display_name)).Contains($strippedNorm))
+                }
+            )
+        }
+    }
     if ($substrHits.Count -eq 1) { return [string]$substrHits[0].id }
     if ($substrHits.Count -gt 1) {
         $names = @($substrHits | ForEach-Object { [string]$_.id }) -join ', '
@@ -574,6 +585,7 @@ try {
         exit 0
     }
 
+    $defaultEffortExplicit = $PSBoundParameters.ContainsKey('DefaultEffort')
     $reviewOnlyExplicit = $PSBoundParameters.ContainsKey('ReviewOnlyModels')
     $rawModelTokens = @(Expand-SelectionTokens $Models)
     $rawReviewTokens = @(Expand-SelectionTokens $ReviewOnlyModels)
@@ -718,9 +730,8 @@ try {
     # Step 2: Apply roster activation, bootstrap new models, retire unselected, sync state baselines
     $addedModels = New-Object 'System.Collections.Generic.List[string]'
     $retiredModels = New-Object 'System.Collections.Generic.List[string]'
-    $backupRelPath = $null
 
-    Invoke-WithLock -Paths $paths -Name registry -ScriptBlock {
+    $backupRelPath = Invoke-WithLock -Paths $paths -Name registry -ScriptBlock {
         $reg = Read-Registry -Paths $paths
         $prevText = [IO.File]::ReadAllText($paths.Registry, $script:OrchestraUtf8)
         $oldRev = [long](Get-OrchestraProperty $reg 'registry_rev' 0)
@@ -735,7 +746,7 @@ try {
                 Set-OrchestraProperty $m 'status' 'active'
                 $inv = Get-OrchestraProperty $m 'invoke'
                 $effs = @(Get-OrchestraArray $inv 'efforts' | ForEach-Object { [string]$_ })
-                if ($effs -contains $DefaultEffort) {
+                if ($defaultEffortExplicit -and ($effs -contains $DefaultEffort)) {
                     Set-OrchestraProperty $inv 'default_effort' $DefaultEffort
                 }
                 Set-OrchestraProperty $m 'primary_disabled' ([bool]$resolvedReviewOnly.Contains($mId))
@@ -771,7 +782,7 @@ try {
         $backupName = ('models-{0}-{1}-setup.json' -f $stamp, $oldRev)
         $backupFull = Join-Path $paths.History $backupName
         [IO.File]::WriteAllText($backupFull, $prevText, $script:OrchestraUtf8)
-        $backupRelPath = 'registry/history/' + $backupName
+        $createdBackupRel = 'registry/history/' + $backupName
 
         Write-JsonAtomic -Path $paths.Registry -Object $reg
 
@@ -780,7 +791,7 @@ try {
             ('- registry_rev: {0} -> {1}' -f $oldRev, $newRev)
             ('- active models: {0}' -f ($selectedIds.ToArray() -join ', '))
             ('- review-only models: {0}' -f $(if ($resolvedReviewOnly.Count -gt 0) { $resolvedReviewOnly.ToArray() -join ', ' } else { 'none' }))
-            ('- backup: {0}' -f $backupRelPath)
+            ('- backup: {0}' -f $createdBackupRel)
             ''
         ) -join "`n"
         $existingLog = if ([IO.File]::Exists($paths.Changelog)) { [IO.File]::ReadAllText($paths.Changelog, $script:OrchestraUtf8) } else { "# Cowork changelog`n`n" }
@@ -840,6 +851,7 @@ try {
             }
             Save-State -Paths $paths -State $st
         }
+        return $createdBackupRel
     }
 
     # Step 3: Post-selection capability evaluation

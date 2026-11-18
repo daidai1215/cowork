@@ -69,6 +69,9 @@ try {
         [IO.File]::Copy((Join-Path $root $relDoc), (Join-Path $caseRepo $relDoc), $true)
     }
 
+    $initialCaseRegObj = Read-JsonFile -Path $caseReg
+    $initialActiveCount = @($initialCaseRegObj.models | Where-Object { [string]$_.status -eq 'active' }).Count
+
     $agyFixture = Join-Path $tempRoot 'agy-models.txt'
     $agyLines = @(
         "gemini-4-carbon-low`tGemini 4 Carbon Low"
@@ -78,6 +81,10 @@ try {
         "gemini-4-hydrogen-medium`tGemini 4 Hydrogen Medium"
         "gemini-4-hydrogen-high`tGemini 4 Hydrogen High"
         "gemini-4-hydrogen-xhigh`tGemini 4 Hydrogen XHigh"
+        "gemini-4-neon-low`tGemini 4 Neon Low"
+        "gemini-4-neon-medium`tGemini 4 Neon Medium"
+        "gemini-4-neon-high`tGemini 4 Neon High"
+        "gemini-4-neon-xhigh`tGemini 4 Neon XHigh"
         "claude-opus-5-5-low`tClaude Opus 5.5 Low"
         "claude-opus-5-5-medium`tClaude Opus 5.5 Medium"
         "claude-opus-5-5-high`tClaude Opus 5.5 High"
@@ -88,7 +95,7 @@ try {
     [IO.File]::WriteAllText($agyFixture, $agyLines, $script:OrchestraUtf8)
 
     $codexFixture = Join-Path $tempRoot 'codex-catalog.json'
-    $codexJson = '{"models":[{"slug":"gpt-6-astra"},{"slug":"gpt-6-sol"}]}'
+    $codexJson = '{"models":[{"slug":"gpt-6.2-astra"},{"slug":"gpt-6-sol"}]}'
     [IO.File]::WriteAllText($codexFixture, $codexJson, $script:OrchestraUtf8)
 
     # 1. -ListAvailable discovers both agy and codex models and effort tiers
@@ -98,20 +105,20 @@ try {
         '-RegistryPath', $caseReg, '-StateDir', $caseState
     )
     $availItems = @(Get-OrchestraArray $listRun.Json 'available')
-    $hydrogenItem = @($availItems | Where-Object { [string]$_.id -eq 'gemini-4-hydrogen' })
+    $neonItem = @($availItems | Where-Object { [string]$_.id -eq 'gemini-4-neon' })
     $solItem = @($availItems | Where-Object { [string]$_.id -eq 'gpt-6-sol' })
     Assert-STest (
         $listRun.Exit -eq 0 -and
-        $hydrogenItem.Count -eq 1 -and
-        @($hydrogenItem[0].efforts) -contains 'xhigh' -and
+        $neonItem.Count -eq 1 -and
+        @($neonItem[0].efforts) -contains 'xhigh' -and
         $solItem.Count -eq 1 -and
         [string]$solItem[0].channel -eq 'codex' -and
         -not [bool]$solItem[0].evaluated
     ) 'setup -ListAvailable discovers agy and codex models with effort metadata'
 
-    # 2. Shorthand -DryRun for carbon,astra,opus5.5 resolves cleanly with zero planned evaluations under auto
+    # 2. Shorthand -DryRun for carbon,6.2astra,4hextra,opus5.5 resolves cleanly with zero planned evaluations under auto
     $dryRun = Invoke-SScript 'scripts\setup.ps1' @(
-        '-Models', 'carbon,astra,opus5.5', '-ReviewOnlyModels', 'opus5.5',
+        '-Models', 'carbon,6.2astra,4hextra,opus5.5', '-ReviewOnlyModels', 'opus5.5',
         '-Evaluate', 'auto', '-DryRun', '-NoNetwork',
         '-AgyListFile', $agyFixture, '-CodexCatalogFile', $codexFixture,
         '-RegistryPath', $caseReg, '-StateDir', $caseState
@@ -119,13 +126,14 @@ try {
     $selDry = @(Get-OrchestraArray $dryRun.Json 'selected_models')
     Assert-STest (
         $dryRun.Exit -eq 0 -and
-        $selDry.Count -eq 3 -and
+        $selDry.Count -eq 4 -and
         $selDry -contains 'gemini-4-carbon' -and
-        $selDry -contains 'gpt-6-astra' -and
+        $selDry -contains 'gpt-6.2-astra' -and
+        $selDry -contains 'gemini-4-hydrogen' -and
         $selDry -contains 'claude-opus-5-5' -and
         @(Get-OrchestraArray $dryRun.Json 'planned_evaluations').Count -eq 0 -and
         -not [IO.Directory]::Exists($caseState)
-    ) 'setup shorthand DryRun resolves carbon,astra,opus5.5 without touching state'
+    ) 'setup shorthand DryRun resolves carbon,6.2astra,4hextra,opus5.5 without touching state'
 
     # 3. Ambiguous shorthand and all-review-only fail closed with exit 2
     $ambigRun = Invoke-SScript 'scripts\setup.ps1' @(
@@ -142,7 +150,7 @@ try {
     )
     Assert-STest ($allRoRun.Exit -eq 2) 'marking all selected models as ReviewOnlyModels fails closed'
 
-    # 4. Select custom new models (hydrogen, sonnet5.5, sol) and run full evaluation (research + probe)
+    # 4. Select custom new models (neon, sonnet5.5, sol) and run full evaluation (research + probe)
     $fakeCodexHome = Join-Path $tempRoot 'codex-home'
     [void][IO.Directory]::CreateDirectory($fakeCodexHome)
     [IO.File]::WriteAllBytes((Join-Path $fakeCodexHome 'auth.json'), $script:OrchestraUtf8.GetBytes('{"fixture":"setup"}'))
@@ -255,7 +263,7 @@ exit 0
     $env:MODEL_ORCHESTRA_CODEX = $fakeCodex
 
     $fullSetup = Invoke-SScript 'scripts\setup.ps1' @(
-        '-Models', 'hydrogen,sonnet5.5,sol',
+        '-Models', 'neon,sonnet5.5,sol',
         '-ReviewOnlyModels', 'sonnet5.5',
         '-Evaluate', 'full',
         '-SkipJunction', '-NoNetwork',
@@ -267,15 +275,16 @@ exit 0
         $fullSetup.Exit -eq 0 -and
         [bool]$fullSetup.Json.docs_synced -eq $true -and
         [bool]$fullSetup.Json.doctor_healthy -eq $true -and
+        -not [string]::IsNullOrWhiteSpace([string]$fullSetup.Json.backup) -and
         @(Get-OrchestraArray $fullSetup.Json 'added_models').Count -eq 3 -and
-        @(Get-OrchestraArray $fullSetup.Json 'retired_models').Count -eq 3
-    ) 'setup custom roster (hydrogen, sonnet5.5, sol) with full evaluation exits 0'
+        @(Get-OrchestraArray $fullSetup.Json 'retired_models').Count -eq $initialActiveCount
+    ) 'setup custom roster (neon, sonnet5.5, sol) with full evaluation exits 0'
 
     $updatedReg = Read-JsonFile -Path $caseReg
     $activeAfter = @($updatedReg.models | Where-Object { [string]$_.status -eq 'active' })
     $sonnetObj = @($activeAfter | Where-Object { [string]$_.id -eq 'claude-sonnet-5-5' })[0]
     $solObj = @($activeAfter | Where-Object { [string]$_.id -eq 'gpt-6-sol' })[0]
-    $hydrogenObj = @($activeAfter | Where-Object { [string]$_.id -eq 'gemini-4-hydrogen' })[0]
+    $neonObj = @($activeAfter | Where-Object { [string]$_.id -eq 'gemini-4-neon' })[0]
 
     Assert-STest (
         $activeAfter.Count -eq 3 -and
@@ -284,7 +293,7 @@ exit 0
         [string]$solObj.caps.code_rigor.source -eq 'research+probe' -and
         [double]$solObj.caps.code_rigor.score -gt 8.5 -and
         [string]$updatedReg.aliases.'best-rigor' -eq 'gpt-6-sol' -and
-        [string]$updatedReg.aliases.'best-prose' -eq 'gemini-4-hydrogen' -and
+        [string]$updatedReg.aliases.'best-prose' -eq 'gemini-4-neon' -and
         [string]$updatedReg.aliases.'best-aesthetic' -eq 'claude-sonnet-5-5'
     ) 'post-selection full evaluation populates research+probe scores and rebinds best-* aliases'
 
@@ -305,9 +314,9 @@ exit 0
     Assert-STest (
         $checkSyncAfter.Exit -eq 0 -and
         $profilesText.Contains('gpt-6-sol') -and
-        $profilesText.Contains('gemini-4-hydrogen') -and
+        $profilesText.Contains('gemini-4-neon') -and
         $profilesText.Contains('claude-sonnet-5-5') -and
-        -not $profilesText.Contains('gpt-6-astra')
+        -not $profilesText.Contains('gpt-6.2-astra')
     ) 'sync-docs renders custom roster into model-profiles.md with zero drift'
 }
 catch {

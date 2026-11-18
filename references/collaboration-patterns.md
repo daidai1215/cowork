@@ -1,6 +1,6 @@
-# 协作模式手册（Collaboration Patterns · 极致性能版）
+# 协作模式手册（Collaboration Patterns · 极致性能与快速分层版）
 
-本文件整合原 `gpt-write`、`gpt-review` 的全部核心规则，并将 Antigravity **Orchestrator** 与 **Swarm** 的控制论骨架（**规划期硬只读门禁、自包含契约交接、`Re-plan if` 硬熔断、无冲突分片并行、独立实跑验证员**）反向嫁接至三大异构旗舰阵容：**GPT-6 Astra (`high` / 攻坚 `xhigh`)**、**Gemini 4 Carbon (`high`)**、**Claude Opus 5.5 (`high`，`primary_disabled=true` 严格保护)**。
+本文件整合原 `gpt-write`、`gpt-review` 的全部核心规则，并将 Antigravity **Orchestrator** 与 **Swarm** 的控制论骨架（**规划期硬只读门禁、自包含契约交接、`Re-plan if` 硬熔断、无冲突分片并行、独立实跑验证员**）反向嫁接至四大主力阵容：**GPT-6.2 Astra (`high` / 攻坚 `xhigh`)**、**Gemini 4 Carbon (`high`)**、**Gemini 4 Hydrogen (`4H Extra / xhigh`)**、**Claude Opus 5.5 (`high`，`primary_disabled=true` 严格保护)**。
 
 术语定义：
 - **主控**：当前对话模型（负责只读勘察立项、签发契约、实跑验收与熔断重排）；
@@ -11,9 +11,10 @@
 
 ## 0. 通用铁律（所有模式都适用）
 
-1. **极致性能优先 + Opus 5.5 严格不解禁主写**
-   - 默认启用 `peak` 模式（$\lambda_q=0,\ \lambda_s=0$），Astra 与 Carbon 纯按能力上限竞争主写；常规工程与排错跑极速高质量 `high` 档，命中硬核数学（`math`）或带 `-AllowEscalation` 升级重试时，Astra 自动拉满至 **`xhigh` 档**。
-   - **`claude-opus-5-5` 锁定 `primary_disabled=true`**：严禁让 Opus 承担大段代码/长文初稿或主写 fallback；Opus 始终保持 `high` 档，专职前端/视觉 Aesthetic Gate、文案质感把关，以及双旗舰竞标难分高下时的精简方案终裁（输入 ≤ 800 字或截图 + tokens）。
+1. **极致性能优先 + 4H Extra 快速分级 + Opus 5.5 严格不解禁主写**
+   - 默认启用 `peak` 模式（$\lambda_q=0,\ \lambda_s=0$），`GPT-6.2 Astra` 与 `Gemini 4 Carbon` 纯按能力上限竞争主写；常规工程与排错跑极速高质量 `high` 档，命中硬核数学（`math`）或带 `-AllowEscalation` 升级重试时，Astra 自动拉满至 **`xhigh` 档**。
+   - **4H Extra 快速分级（`-Mode fast_4h` / `-Fast4H`）**：当用户要求用 **Gemini 4H Extra (`gemini-4-hydrogen-xhigh`)** 快速使用时，将原属 `Carbon` 的前端起草、大仓库预读/检索/重构、日常文档以及常规后端/Bug 审查与竞标副笔下放至 `4H Extra`（速度约 2.5 倍且工具调用幻觉率低）；仅少数高要求关卡保留 `Carbon`（`paper` / `essay` / `copywriting`、高难 `math` / `algorithm` 复核、以及 `-AllowEscalation` 升级任务），`GPT-6.2 Astra` 继续稳守后端/数学/疑难 Bug/生图/Office 主攻。
+   - **`claude-opus-5-5` 锁定 `primary_disabled=true`**：严禁让 Opus 承担大段代码/长文初稿或主写 fallback（无论普通模式还是 `/swarm` 模式）；Opus 始终保持 `high` 档，专职前端/视觉 Aesthetic Gate、文案质感把关，以及双旗舰竞标难分高下时的精简方案终裁（输入 ≤ 800 字或截图 + tokens）。
 2. **先只读勘察立项，后分片动笔（Read-Only Recon Gate）**
    - 复杂任务严禁边看边改。动笔前必须通过只读通道（`-Access read`，优先用 Carbon 1M 上下文扫全局，硬核接口叠 Astra 复核）生成自包含的 `<scratch>/plan_contract.md`：
      - **目标与非目标**；
@@ -42,13 +43,13 @@
 
 ## 1. Delegate-Execute（双旗舰只读立项 → 专长旗舰契约落地）—— 原 `gpt-write` 升级
 
-适用场景：将主体实现交由该领域能力天花板模型完成（后端/并发/数学/疑难 Bug/Office 交 GPT-6 Astra `high`/`xhigh`；1M 全仓重构/长文起草交 Gemini 4 Carbon `high`）。
+适用场景：将主体实现交由该领域能力天花板模型完成（后端/并发/数学/疑难 Bug/Office 交 GPT-6.2 Astra `high`/`xhigh`；1M 全仓重构/长文起草在 `peak` 下交 Gemini 4 Carbon `high`，在 `fast_4h` 下大部分交 4H Extra `xhigh`）。
 
-1. **只读勘察与方案起草（`-Access read`）**：由 Carbon（1M 上下文）或执行者只读诊断现状，产出候选方案至 `<scratch>/plan_proposal.md`。
+1. **只读勘察与方案起草（`-Access read`）**：由 Carbon / 4H Extra（均 1M 上下文）或执行者只读诊断现状，产出候选方案至 `<scratch>/plan_proposal.md`。
 2. **签发自包含契约（落盘 `<scratch>/plan_contract.md`）**：主控核定具体改动步骤、`AllowedPrefixes`、`ForbiddenPrefixes`、可执行验收命令及 `Re-plan if:` 清单。
 3. **专长执行者落地**：
-   - **GPT-6 Astra（codex 通道）**：若 `codex_shell_probe.shell_works != true`，以 `-Access read -Tags <tags>` 调用，要求按 `=====FILE: …=====` 交付完整文件（或触发熔断时输出 `=====ORCHESTRA_REPLAN_REQUIRED=====`），由主控执行 `extract-files.ps1 -AllowedPrefixes <白名单> -ForbiddenPrefixes <禁区>` 原子落盘。若因 Cockpit 切号报 `resume_invalidated=true`，直接去掉 `-Resume` 内联 `plan_contract.md` 与源码开新会话零损续接。
-   - **Gemini 4 Carbon（agy 通道）**：可直接 `-Access write` 按契约落地。
+   - **GPT-6.2 Astra（codex 通道）**：默认以 `-Access read -Tags <tags> -OutFile <f>`（纯推理大脑快道，自动 `--disable shell_tool --disable unified_exec`）调用，要求按 `=====FILE: …=====` 交付完整文件（或触发熔断时输出 `=====ORCHESTRA_REPLAN_REQUIRED=====`），由主控执行 `extract-files.ps1 -AllowedPrefixes <白名单> -ForbiddenPrefixes <禁区>` 原子落盘。若因 Cockpit 切号报 `resume_invalidated=true`，直接去掉 `-Resume` 内联 `plan_contract.md` 与源码开新会话零损续接。
+   - **Gemini 4 Carbon / Gemini 4 Hydrogen（agy 通道）**：可直接 `-Access write` 按契约落地。
 4. **Active Verifier + 主控实跑验收**：核查 diff、实跑 `Verification Gate` 全部测试与指标；未达标处附实跑报错打回（必要时带 `-AllowEscalation`），严禁主控越界直接手改覆盖执行者代码。
 
 ---
@@ -72,8 +73,8 @@
 适用场景：核心算法设计、高并发死锁/竞态、疑难根因 `bugfix`、关键系统架构（`route.ps1` 在 `peak` 模式下返回 `orchestration.dual_draft_eligible = true` 及 `co_drafter`）。
 
 1. **同一契约，双强盲写**：基于同一份 `<scratch>/plan_contract.md`，主控在后台**同时并行启动**：
-   - **Draft A**：`gpt-6-astra`（`xhigh` 档，强于形式化不变量、极端边界与数学严密性）→ 输出至 `<scratch>/draft_astra.md`；
-   - **Draft B**：`gemini-4-carbon`（`high` 档，强于 1M 全局关联、系统工程视角与简洁实现）→ 输出至 `<scratch>/draft_carbon.md`。
+   - **Draft A**：`gpt-6.2-astra`（`high` / 攻坚 `xhigh`，强于形式化不变量、极端边界与科研严密性）→ 输出至 `<scratch>/draft_astra.md`；
+   - **Draft B**：`gemini-4-carbon`（`peak` 下 `high` 档）或 `gemini-4-hydrogen`（`fast_4h` 下 `xhigh` 档）→ 输出至 `<scratch>/draft_gemini.md`。
 2. **实跑基准对决（Benchmark Gate）**：在隔离目录/沙盒分别落盘两套方案，用同一套单元测试、压力/边界用例与复杂度指标实测对比。
 3. **择优融合（必要时请 Opus 精简终裁）**：
    - 若一方实测全绿且结构明显占优，直接采纳并吸收另一方发现的边界防御点；
@@ -107,12 +108,13 @@
 
 | 子任务 | 交给 | 说明 |
 |---|---|---|
-| 高精度生图、科研示意图、信息图、UI Mockup、透明通道、局部重绘 | GPT-6 Astra (`high`，Codex `image_gen`) | 硬规则：生图仅走 Codex，生成后拷入项目目录 |
-| PPT（`ppt-master` / `nature-paper2ppt`）、Word 修订与公式、Excel 跨表公式、可填写 PDF | GPT-6 Astra (`high`，Codex 插件) | 版式可叠加 Aesthetic Gate 把关 |
-| 专利交底书、基金证据表的严谨逻辑骨架 | GPT-6 Astra (`high`) 起草结构 | **最终成文与去 AI 腔润色必须交由 Gemini 4 Carbon 完成，严禁由 GPT 定稿** |
-| LaTeX 模板编译排错、桌面/浏览器联动 | GPT-6 Astra (`high`) | |
-| 形式数学推导、极隐蔽并发/数值稳定性 bug、极限篇幅压缩 | GPT-6 Astra (`xhigh`) | 攻坚自动升 `xhigh`；关键难题可开启第 3 节 `Dual-Draft Synthesis` |
-| 整仓或超长文档（1M 上下文）通读、联网检索、世界知识综述 | Gemini 4 Carbon (`high`) | 事实与文献数据须经 Astra 抽查（Truth Gate） |
+| 高精度生图、科研示意图、信息图、UI Mockup、透明通道、局部重绘 | GPT-6.2 Astra (`high`，Codex `image_gen`) | 硬规则：生图仅走 Codex，生成后拷入项目目录 |
+| PPT（`ppt-master` / `nature-paper2ppt`）、Word 修订与公式、Excel 跨表公式、可填写 PDF | GPT-6.2 Astra (`high`，Codex 插件) | 版式可叠加 Aesthetic Gate 把关 |
+| 专利交底书、基金证据表的严谨逻辑骨架 | GPT-6.2 Astra (`high`) 起草结构 | **最终成文与去 AI 腔润色必须交由 Gemini 4 Carbon 完成，严禁由 GPT 定稿** |
+| LaTeX 模板编译排错、桌面/浏览器联动 | GPT-6.2 Astra (`high`) | |
+| 形式数学推导、极隐蔽并发/数值稳定性 bug、科研与极限篇幅压缩 | GPT-6.2 Astra (`xhigh`) | `math` 与 `-AllowEscalation` 自动升 `xhigh`；关键难题可开启 `Dual-Draft Synthesis` |
+| 极高要求学术论文/深度长文终稿、HLE 级深度综合分析 | Gemini 4 Carbon (`high`) | `fast_4h` 模式下依然保留给 Carbon |
+| 整仓高速预读、常规检索与重构、高速前端草稿、Swarm 并发编码 | Gemini 4 Hydrogen (`xhigh` / 4H Extra) | 速度 2.5x、工具幻觉率更低；疑难通过 `escalate_to` 升 Carbon |
 
 ---
 
@@ -146,6 +148,24 @@
    - **失败路线按四元组保留**：`方法 — 失败前提条件 — 实测证据 — 何时可重试`（既防止新会话重踩死胡同，也防止把“当时代理未开”等局部前提故障误写成永久禁令）；
    - **彻底剥离**：逐轮对话、完整 `stderr`、重复重试日志、已失效猜测；工具问题仅保留仍生效的环境硬限制、已固化修复与复现命令（详细日志外置存盘，不入交接正文）。
 3. **交接前后核验闭环**：换对话前确认所有共享文件修改与后台任务状态已登记落盘；新对话启动后，首轮先核验交接单中的工作区状态与版本指纹，确认一致后再继续推进。
+
+## 8. Swarm + Cowork 联合协同协议（`/swarm` 下调用 Opus 5.5 与 GPT-6.2 Astra）
+
+在 Antigravity 开启 `/swarm`（`native_swarm`）后：
+- **为什么必须通过 `cowork` 桥接**？
+  1. 原生 `swarm{action:"add"}` 只能选择 Antigravity 通道模型（`Carbon / 4H Extra / Opus`），**无法直接拉起 Codex 通道的 `gpt-6.2-astra`**；
+  2. 为保护稀缺额度，不应开一整池 `Opus 5.5` Worker 并行耗额度；而是仅在 UI Aesthetic Gate 或双方案难分高下时，通过 `cowork` 单次精简调用 `claude-opus-5-5`。
+  3. 当用户处于 **4H Extra 快速模式** 开启 `/swarm` 时，大量分片编码/测试由 4H Extra Worker 并行推进，需要极高文笔或复杂复核时同样经 `cowork` 调 `gemini-4-carbon`。
+
+### 推荐架构（避免多 Worker 并发撞 Cockpit 切号）
+1. **主力编码与测试池**：`2~5` 个 **4H Extra (`gemini-4-hydrogen-xhigh`)** 或 **Carbon** 原生 Swarm Worker，各自绑定互不重叠的 `workspace:"share"` 与文件前缀，负责快速分片开发与实跑测试。
+2. **专职异构门禁工（`rigor-gate` / `cowork-bridge`，推荐 1 名，留 `inherit`）**：
+   - 运行在 4H/Carbon 上，**专门充当 Swarm 内的 `cowork` 统一网关**；
+   - 需要 **GPT-6.2 Astra**（硬核算法/并发/疑难 Bug/生图/Office/核心 Diff 严审）时，在 Worker 内通过 `run_command`（若工具声明有 `BypassSandbox` 参数则传 `true`）调 `invoke-model.ps1 -Model gpt-6.2-astra -StatusFile "$HOME\.cowork\live\swarm-rigor.json"`，并发控制在 **≤ 1~2 路**，彻底避免多个 Worker 同时把 Cockpit 账号池打穿或相互抢换 `auth.json`；
+   - 需要 **Claude Opus 5.5**（多视口截图审美把关或 Best-of-2 ≤ 800 字终裁）时，调用 `invoke-model.ps1 -Model claude-opus-5-5 -StatusFile "$HOME\.cowork\live\swarm-opus.json"`，并将回执结论以 `#seq` 编号贴回看板或直接 `@` 下一步负责的作者（遵循 `native_swarm` 的按需 `@mention` 规则，不无故 `@all`）。
+3. **Worker 直接按需调用时的硬约束**（若由普通分片 Worker 直接触发 `cowork`）：
+   - Coordinator 必须在创建 Worker 的 `brief` 中内联以下**模板 F**（因为新 Swarm Worker 对主对话与技能上下文天然零记忆）；
+   - 每次调用**必须传唯一 `-StatusFile`**（如 `swarm-<worker名>.json`；若工具声明有 `BypassSandbox` 则传 `true`），不得多个 Worker 共读默认 `latest-codex.json`。
 
 ---
 
@@ -232,4 +252,16 @@ impact: <受影响的步骤>
 ## 5. 待验证假设与下一步（Open Assumptions & Next Step）
 - 待核实假设：`<若有>`
 - 新对话首步动作：**先核验第 3 节仓库/文件状态一致**，随后执行 `<下一步具体动作>`
+```
+
+### F. `/swarm` Worker 调用 `cowork` 桥接内联指令（写入 `swarm{action:"add", brief:...}`）
+```text
+【Swarm + Cowork 异构桥接授权】
+当你负责的分片遇到以下场景时，禁止在本地模型硬猜或越权开原生 Opus 池，请通过 cowork 脚本调用外部旗舰（仅当 run_command 声明含 BypassSandbox 时传 true；无此字段直接运行）：
+1. 调用 GPT-6.2 Astra（硬核算法/后端/疑难Bug/严审，先读或打包契约再执行，请使用纯文本交付避免内部 shell 卡死）：
+   powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\.gemini\config\skills\cowork\scripts\invoke-model.ps1" -Model gpt-6.2-astra -Access read -Tags "<tags>" -PromptFile "<prompt.md>" -OutFile "<astra_out.md>" -StatusFile "$HOME\.cowork\live\swarm-<worker>.json"
+   若输出含 =====FILE: ...=====，用 extract-files.ps1 -AllowedPrefixes "<你的分片>" 落盘并实跑测试。
+2. 调用 Claude Opus 5.5（仅限 UI 截图/tokens 审美把关或 ≤800 字双方案架构终裁，严禁派长代码初稿）：
+   powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\.gemini\config\skills\cowork\scripts\invoke-model.ps1" -Model claude-opus-5-5 -Access read -Tags "frontend,ui" -PromptFile "<aesthetic_prompt.md>" -OutFile "<opus_out.md>" -StatusFile "$HOME\.cowork\live\swarm-<worker>-opus.json"
+3. 验收完毕后回填结果：record-outcome.ps1 -SessionId <sid> -Outcome ok|redo|fail；并在看板仅 @ 需衔接的下一位 peer（无阻塞不要 @coordinator 或 @all）。
 ```

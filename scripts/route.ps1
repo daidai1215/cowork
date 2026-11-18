@@ -11,6 +11,7 @@ Writes one JSON object without changing registry or state.
 param(
     [string[]]$Tags = @(),
     [string]$Mode = '',
+    [switch]$Fast4H,
     [string[]]$Exclude = @(),
     [switch]$AllowEscalation,
     [string]$RegistryPath,
@@ -196,7 +197,7 @@ function Resolve-REffort {
     $hitsPeakTag = (
         @($TagList | Where-Object { $peakTags -contains $_ }).Count -gt 0
     )
-    if ($Escalated -or ($ModeName -eq 'peak' -and $hitsPeakTag)) {
+    if ($Escalated -or ($ModeName -in @('peak', 'fast_4h') -and $hitsPeakTag)) {
         return $peakEffort
     }
     return $baseEffort
@@ -233,18 +234,26 @@ try {
     $policy = Get-RValue $registry 'policy'
     $modesTable = Get-RValue $registry 'modes'
     if ([string]::IsNullOrWhiteSpace($Mode)) {
-        $configuredMode = [string](Get-RValue $policy 'default_mode' '')
-        if (
-            -not [string]::IsNullOrWhiteSpace($configuredMode) -and
-            $null -ne (Get-RValue $modesTable $configuredMode)
-        ) {
-            $Mode = $configuredMode
+        if ($Fast4H -and $null -ne (Get-RValue $modesTable 'fast_4h')) {
+            $Mode = 'fast_4h'
         }
-        elseif ($null -ne (Get-RValue $modesTable 'peak')) {
-            $Mode = 'peak'
+        elseif ($Fast4H) {
+            $Mode = 'fast'
         }
         else {
-            $Mode = 'balanced'
+            $configuredMode = [string](Get-RValue $policy 'default_mode' '')
+            if (
+                -not [string]::IsNullOrWhiteSpace($configuredMode) -and
+                $null -ne (Get-RValue $modesTable $configuredMode)
+            ) {
+                $Mode = $configuredMode
+            }
+            elseif ($null -ne (Get-RValue $modesTable 'peak')) {
+                $Mode = 'peak'
+            }
+            else {
+                $Mode = 'balanced'
+            }
         }
     }
     $modeConfig = Get-RValue $modesTable $Mode
@@ -538,13 +547,59 @@ try {
     }
 
     $primary = $primaryPool[0].Model
+    $fastTierOffloaded = $false
+    $fastWorkhorseModel = $null
+    $fastFromModel = $null
+    $fastFromId = $null
+    $fastToId = $null
+    $retainPrimaryHit = $false
+    $retainReviewerHit = $false
+    $retainPolisherHit = $false
+
+    $fastWorkhorseMap = Get-RValue $policy 'fast_workhorse_map' $null
+    if ($Mode -eq 'fast_4h' -and -not $AllowEscalation -and $null -ne $fastWorkhorseMap) {
+        $fastFromId = Resolve-RModel $registry ([string](Get-RValue $fastWorkhorseMap 'from_model' ''))
+        $fastToId = Resolve-RModel $registry ([string](Get-RValue $fastWorkhorseMap 'to_model' ''))
+        if (-not [string]::IsNullOrWhiteSpace($fastFromId) -and -not [string]::IsNullOrWhiteSpace($fastToId) -and $fastFromId -cne $fastToId) {
+            $retainPrimaryTags = @(Get-RValue $fastWorkhorseMap 'retain_primary_tags' @() | ForEach-Object { [string]$_ })
+            $retainReviewerTags = @(Get-RValue $fastWorkhorseMap 'retain_reviewer_tags' @() | ForEach-Object { [string]$_ })
+            $retainPolisherTags = @(Get-RValue $fastWorkhorseMap 'retain_polisher_tags' @() | ForEach-Object { [string]$_ })
+            $retainPrimaryHit = (@($tagNames | Where-Object { $retainPrimaryTags -contains $_ }).Count -gt 0)
+            $retainReviewerHit = (@($tagNames | Where-Object { $retainReviewerTags -contains $_ }).Count -gt 0)
+            $retainPolisherHit = (@($tagNames | Where-Object { $retainPolisherTags -contains $_ }).Count -gt 0)
+
+            $fastActiveMatch = @(
+                $activeRecords | Where-Object { $_.Id -eq $fastToId -and -not [bool](Get-RValue $_.Model 'primary_disabled' $false) }
+            ) | Select-Object -First 1
+            if ($null -ne $fastActiveMatch) {
+                $fastWorkhorseModel = $fastActiveMatch.Model
+            }
+            $fastFromMatch = @(
+                $activeRecords | Where-Object { $_.Id -eq $fastFromId }
+            ) | Select-Object -First 1
+            if ($null -ne $fastFromMatch) {
+                $fastFromModel = $fastFromMatch.Model
+            }
+            $fastPrimaryPoolMatch = @($primaryPool | Where-Object { $_.Id -eq $fastToId }) | Select-Object -First 1
+            if ($null -ne $fastPrimaryPoolMatch -and $primary.id -eq $fastFromId -and -not $retainPrimaryHit) {
+                $primary = $fastPrimaryPoolMatch.Model
+                $fastTierOffloaded = $true
+                [void]$reasons.Add("fast_4h tier: offloaded routine $fastFromId primary task to $fastToId (retaining $fastFromId for high-bar tags).")
+            }
+        }
+    }
+
     $result.primary = [string]$primary.id
-    $result.fallback = @(
-        $primaryPool |
-            Where-Object { $_.Id -ne $primary.id } |
-            Select-Object -First 2 |
-            ForEach-Object { $_.Id }
-    )
+    $fallbackList = New-Object 'System.Collections.Generic.List[string]'
+    if ($fastTierOffloaded -and ($primaryPool | Where-Object { $_.Id -eq $fastFromId })) {
+        [void]$fallbackList.Add($fastFromId)
+    }
+    foreach ($rec in $primaryPool) {
+        if ($rec.Id -eq $primary.id -or $fallbackList.Contains($rec.Id)) { continue }
+        [void]$fallbackList.Add([string]$rec.Id)
+        if ($fallbackList.Count -ge 2) { break }
+    }
+    $result.fallback = @($fallbackList.ToArray())
 
     $reviewer = $null
     if ($null -ne $aestheticRule) {
@@ -602,6 +657,28 @@ try {
     }
 
     if ($null -ne $reviewer) {
+        if (
+            $Mode -eq 'fast_4h' -and -not $AllowEscalation -and
+            $null -ne $fastWorkhorseModel -and
+            $reviewer.id -eq $fastFromId -and
+            -not $retainReviewerHit -and
+            $primary.id -ne $fastToId -and
+            ($fastWorkhorseModel.vendor -ne $primary.vendor -or $reviewer.vendor -eq $primary.vendor)
+        ) {
+            $reviewer = $fastWorkhorseModel
+            $fastTierOffloaded = $true
+            [void]$reasons.Add("fast_4h tier: offloaded routine $fastFromId review to $fastToId (math/algorithm retains $fastFromId).")
+        }
+        elseif (
+            $Mode -eq 'fast_4h' -and -not $AllowEscalation -and
+            $retainReviewerHit -and
+            $null -ne $fastFromModel -and
+            $reviewer.id -eq $fastToId -and
+            $primary.id -ne $fastFromId
+        ) {
+            $reviewer = $fastFromModel
+            [void]$reasons.Add("fast_4h tier: retained $fastFromId for high-bar review ($($tagNames -join ',')).")
+        }
         $result.reviewer = [string]$reviewer.id
         $result.self_review = $reviewer.id -eq $primary.id
     }
@@ -638,8 +715,26 @@ try {
             )
         }
         if ($null -ne $polisher) {
-            $result.polisher = [string]$polisher.id
-            break
+            if (
+                $Mode -eq 'fast_4h' -and -not $AllowEscalation -and
+                $null -ne $fastWorkhorseModel -and
+                $polisher.id -eq $fastFromId -and
+                -not $retainPolisherHit
+            ) {
+                if ($primary.id -eq $fastToId) {
+                    $polisher = $null
+                    [void]$reasons.Add("fast_4h tier: skipped high-bar $fastFromId polisher since $fastToId already owns routine prose.")
+                }
+                else {
+                    $polisher = $fastWorkhorseModel
+                    $fastTierOffloaded = $true
+                    [void]$reasons.Add("fast_4h tier: offloaded routine $fastFromId polish to $fastToId.")
+                }
+            }
+            if ($null -ne $polisher) {
+                $result.polisher = [string]$polisher.id
+                break
+            }
         }
     }
 
@@ -696,7 +791,7 @@ try {
     )
     $coDrafterId = $null
     $coDrafterEffort = $null
-    if ($Mode -eq 'peak' -and $hitsDualTag) {
+    if ($Mode -in @('peak', 'fast_4h') -and $hitsDualTag) {
         $coCandidates = @(
             $activeRecords | Where-Object {
                 $_.Id -ne $primary.id -and
@@ -709,12 +804,23 @@ try {
         )
         if ($coCandidates.Count -gt 0) {
             $coModel = $coCandidates[0].Model
+            if (
+                $Mode -eq 'fast_4h' -and -not $AllowEscalation -and
+                $null -ne $fastWorkhorseModel -and
+                $coModel.id -eq $fastFromId -and
+                -not $retainReviewerHit -and
+                $fastWorkhorseModel.vendor -ne $primary.vendor
+            ) {
+                $coModel = $fastWorkhorseModel
+                $fastTierOffloaded = $true
+            }
             $coDrafterId = [string]$coModel.id
             $coDrafterEffort = Resolve-REffort `
                 -Model $coModel -ModeName $Mode -TagList @($tagNames) `
                 -Escalated $false -Policy $policy -AllowBoost $true
         }
     }
+    $selectedScore = ($primaryPool | Where-Object { $_.Id -eq $primary.id } | Select-Object -First 1).Score
     $result.orchestration = [ordered]@{
         recon_gate = 'read_only_required'
         handoff_contract = 'plan_contract.md'
@@ -723,10 +829,13 @@ try {
         dual_draft_eligible = ($null -ne $coDrafterId)
         co_drafter = $coDrafterId
         co_drafter_effort = $coDrafterEffort
+        fast_tier_offload = [bool]$fastTierOffloaded
+        fast_workhorse = $(if ($fastTierOffloaded) { $fastToId } else { $null })
+        escalate_to_model = $result.escalate_to
     }
 
     [void]$reasons.Add(
-        "Selected $($primary.id) ($($result.primary_effort)) with score $($primaryPool[0].Score)."
+        "Selected $($primary.id) ($($result.primary_effort)) with score $selectedScore."
     )
     if ($result.self_review) {
         [void]$reasons.Add(
