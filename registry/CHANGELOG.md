@@ -1,5 +1,12 @@
 # Cowork changelog
 
+## 2026-11-18T18:51:18.0000000Z - Performance, locking & routing optimization (`rev 14`): lockless read/cache fast paths, pre-indexed telemetry, load-balance/lane guards, and 2-space LF registry
+- registry_rev: 13 -> 14
+- reformatted `registry/models.json` to compact 2-space LF indentation (`87,057` B -> `36,371` B) while keeping every model score, alias, policy, and `claude-opus-5-5.primary_disabled=true` identical
+- updated `route.ps1` with lockless registry/state reads, `-RegistryObject`/`-SkipTelemetry` fast path, `New-OutcomeStatsIndex` single-pass telemetry, `$PreferIdle` guards on reviewer/co-drafter shifts, `HardPreferredIds` preservation over vendor diversity, `-BusyAgents` vs active-lease deduplication, and `parallel_lanes` pool/`hydrogen_max` filters
+- updated `detect-models.ps1` (clear `$leaseToken` on commit + lockless skip pre-check), `calibrate-telemetry.ps1` (`-SinceDays $WindowDays` + indexed stats), `setup.ps1` (isolated `-ReportDir` on non-canonical registry), and `maintain.ps1` (reuse `$finalReg`)
+- backup: registry/history/models-20261119-024500-13-pre14.json
+
 ## 2026-11-18T17:15:00.0000000Z - Concise English registry & ~80% doc/rule compression, zero-relay Swarm, Codex stealth-feature trim, and in-process `-AutoRecordOk`
 - registry_rev: 12 -> 13
 - compressed all `models.json` narrative strings (`hard_rules[].note`, `strengths`, `weaknesses`, `evidence[].claim`) into concise English (~80% overall doc/rule bloat reduction) while keeping every score, ID, alias, `primary_disabled`, and `policy` invariant identical

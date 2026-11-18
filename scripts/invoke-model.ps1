@@ -24,6 +24,7 @@ param(
     [switch]$Ephemeral,
     [switch]$KeepSession,
     [switch]$EnableAgySlashCommands,
+    [string]$AgySettings = '',
     [string]$StatusFile,
     [switch]$DryRun,
     [string]$RegistryPath,
@@ -39,6 +40,7 @@ function New-InvocationCapture {
         codex_messages = New-Object 'System.Collections.Generic.List[string]'
         timeout = $false; startup_timeout = $false; truncated = $false
         reconnect_count = 0; reconnect_aborted = $false; events_count = 0
+        first_event_ms = $null
         phase = 'starting'; last_event_type = $null
         auth_interrupted = $false; resume_incompatible = $false
         agy_not_logged_in = $false
@@ -184,7 +186,11 @@ $poolName = $null
 $poolLimits = $null
 $slotLease = $null
 $slotWaitedSec = 0.0
+$slotWaitMs = 0.0
+$spawnToFirstEventMs = $null
+$firstEventToDoneMs = $null
 $slotStaggerMs = 0
+$state = $null
 $contextFilesList = New-Object 'System.Collections.Generic.List[string]'
 $startedUtc = (Get-OrchestraNow).ToString('o')
 $rotationEnabled = $false
@@ -325,6 +331,9 @@ try {
     }
     if ($Ephemeral -and $channel -ne 'codex') {
         throw 'ORCHESTRA_ARGS: -Ephemeral is only supported on the codex channel.'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($AgySettings) -and $channel -ne 'agy') {
+        throw 'ORCHESTRA_ARGS: -AgySettings is only supported on the agy channel.'
     }
 
     $Tags = @(
@@ -482,6 +491,7 @@ try {
             $resolveOptions = @{
                 Paths = $paths; NoStateCache = $adHoc
                 AccountRotation = $rotationEnabled
+                State = $state
             }
             if ($rotationEnabled) {
                 $resolveOptions.CodexHome = $codexHomePath
@@ -534,7 +544,7 @@ try {
                 [void]$arguments.Add([string]$cfgArg)
             }
             $supportedCodexFeatures = if ($DryRun) { $null } else {
-                Get-CodexSupportedFeatures -Executable $executable -Paths $paths -NoStateCache:$adHoc
+                Get-CodexSupportedFeatures -Executable $executable -Paths $paths -State $state -NoStateCache:$adHoc
             }
             $stealthArgs = @(Get-CodexStealthArguments -SupportedFeatures $supportedCodexFeatures -Tags $Tags)
             foreach ($sArg in $stealthArgs) {
@@ -616,6 +626,10 @@ try {
         if (-not $EnableAgySlashCommands) {
             $agySlashCommandsDisabled = $true
             [void]$arguments.Add('--disable-slash-commands')
+        }
+        if (-not [string]::IsNullOrWhiteSpace($AgySettings)) {
+            [void]$arguments.Add('--settings')
+            [void]$arguments.Add($AgySettings)
         }
         foreach ($argument in @(
             '--print-timeout', (
@@ -702,13 +716,26 @@ try {
             try {
                 [void][IO.Directory]::CreateDirectory($liveDir)
                 $pruneCutoff = (Get-OrchestraNow).AddDays(-7)
-                foreach ($oldEventsFile in [IO.Directory]::GetFiles($liveDir, '*.events.jsonl')) {
-                    try {
-                        if ([IO.File]::GetLastWriteTimeUtc($oldEventsFile) -lt $pruneCutoff) {
-                            [IO.File]::Delete($oldEventsFile)
-                        }
+                $guidLivePattern = '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\.(json|response\.md|events\.jsonl)$'
+                $protectedLivePaths = @{}
+                foreach ($pCandidate in @($liveStatusPath, $latestChannelStatusPath, $explicitStatusPath, $outputPath)) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$pCandidate)) {
+                        $protectedLivePaths[[IO.Path]::GetFullPath([string]$pCandidate).ToLowerInvariant()] = $true
                     }
-                    catch {}
+                }
+                foreach ($prunePattern in @('*.events.jsonl', '*.json', '*.response.md')) {
+                    foreach ($oldLiveFile in [IO.Directory]::GetFiles($liveDir, $prunePattern)) {
+                        $leafName = [IO.Path]::GetFileName($oldLiveFile)
+                        if ($leafName -notmatch $guidLivePattern) { continue }
+                        $fullLiveCandidate = [IO.Path]::GetFullPath($oldLiveFile).ToLowerInvariant()
+                        if ($protectedLivePaths.ContainsKey($fullLiveCandidate)) { continue }
+                        try {
+                            if ([IO.File]::GetLastWriteTimeUtc($oldLiveFile) -lt $pruneCutoff) {
+                                [IO.File]::Delete($oldLiveFile)
+                            }
+                        }
+                        catch {}
+                    }
                 }
             }
             catch {}
@@ -817,6 +844,9 @@ try {
                 return
             }
             $capture.events_count++
+            if ($null -eq $capture.first_event_ms) {
+                $capture.first_event_ms = [Math]::Round($attemptWatch.Elapsed.TotalMilliseconds, 1)
+            }
             if ($null -ne $eventsWriter) {
                 try { $eventsWriter.WriteLine($Line) } catch {}
             }
@@ -970,6 +1000,7 @@ try {
             }
             finally {
                 $slotAcquireWatch.Stop()
+                $slotWaitMs = [Math]::Round($slotAcquireWatch.Elapsed.TotalMilliseconds, 1)
                 $slotWaitedSec = if ($null -ne $slotLease) {
                     [double]$slotLease.waited_sec
                 }
@@ -988,6 +1019,8 @@ try {
         for ($attempt = 1; $attempt -le (1 + $maxRetries); $attempt++) {
             $attempts = $attempt
             $capture = New-InvocationCapture
+            $spawnToFirstEventMs = $null
+            $firstEventToDoneMs = $null
             $providerExit = $null
             $exitCode = 3
             $errorMessage = $null
@@ -1019,6 +1052,7 @@ try {
             $processException = $null
             $processResult = $null
             $null = & $writeStatus 'connecting' 'process.start' $null
+            $attemptWatch = [Diagnostics.Stopwatch]::StartNew()
             try {
                 $processResult = Invoke-OrchestraProcess -FilePath $executable `
                     -Arguments $arguments.ToArray() -InputText $stdinText `
@@ -1034,6 +1068,12 @@ try {
                 [void]$capture.diagnostics.Add($processException)
             }
             finally {
+                $attemptWatch.Stop()
+                $attemptDoneMs = [Math]::Round($attemptWatch.Elapsed.TotalMilliseconds, 1)
+                if ($null -ne $capture.first_event_ms) {
+                    $spawnToFirstEventMs = [Math]::Round([double]$capture.first_event_ms, 1)
+                    $firstEventToDoneMs = [Math]::Round([Math]::Max(0.0, ($attemptDoneMs - [double]$capture.first_event_ms)), 1)
+                }
                 if ($rotationEnabled) {
                     try {
                         $authAfter = Get-CodexAuthFingerprint -CodexHome $codexHomePath
@@ -1304,6 +1344,13 @@ finally {
 
 $watch.Stop()
 $duration = [Math]::Round($watch.Elapsed.TotalSeconds, 3)
+$timingsMs = [ordered]@{
+    slot_wait_ms = [Math]::Round(([double]$slotWaitedSec * 1000.0), 1)
+    stagger_ms = [int]$slotStaggerMs
+    spawn_to_first_event_ms = $spawnToFirstEventMs
+    first_event_to_done_ms = $firstEventToDoneMs
+    total_ms = [Math]::Round($watch.Elapsed.TotalMilliseconds, 1)
+}
 $cacheHitRate = if (
     $null -ne $capture.input_tokens -and
     [long]$capture.input_tokens -gt 0 -and
@@ -1455,6 +1502,7 @@ $finalResult = @{
     response_truncated = [bool]$responseTruncated
     outcome_recorded = $outcomeRecorded
     usage = $usageSummary
+    timings_ms = $timingsMs
 }
 foreach ($key in $dryData.Keys) { $finalResult[$key] = $dryData[$key] }
 Write-OrchestraResult -Object $finalResult

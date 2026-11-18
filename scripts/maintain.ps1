@@ -316,8 +316,13 @@ try {
     elseif (-not $hasGit) { $gitSkipReason = 'no_git_repo' }
 
     if ($hasGit -and $existingManagedRels.Count -gt 0) {
-        $preStatus = Invoke-GitCommand -GitExe $gitExe -RepoRoot $repoRoot -Arguments (@('status', '--porcelain', '--') + $existingManagedRels)
-        $dirtyLines = @($preStatus.stdout | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $preStatus = Invoke-GitCommand -GitExe $gitExe -RepoRoot $repoRoot -Arguments (@('status', '--porcelain', '--') + $existingManagedRels + @(':(exclude)registry/.registry.lock'))
+        $dirtyLines = @(
+            $preStatus.stdout | Where-Object {
+                $lineText = [string]$_
+                (-not [string]::IsNullOrWhiteSpace($lineText)) -and ($lineText.Trim() -notmatch '\.registry\.lock"?$')
+            }
+        )
         if ($dirtyLines.Count -gt 0) {
             $gitCommitAllowed = $false
             $gitSkipReason = 'dirty_managed_paths'
@@ -594,6 +599,7 @@ try {
     # Step 8: Post-gate usage ledger compaction & registry history GC
     $compactionSummary = $null
     $historyGcSummary = $null
+    $finalReg = $null
     if (-not $DryRun) {
         $finalReg = Read-Registry -Paths $paths
         $pol = Get-OrchestraProperty $finalReg 'policy'
@@ -607,7 +613,7 @@ try {
     # Step 9: Isolated Git commit (and opt-in -Push)
     $gitCommitSha = $null
     $gitPushed = $false
-    $finalRegistry = Read-Registry -Paths $paths
+    $finalRegistry = if ($null -ne $finalReg) { $finalReg } else { Read-Registry -Paths $paths }
     $finalRev = [long](Get-OrchestraProperty $finalRegistry 'registry_rev' 0)
 
     $effectiveManagedRels = @(
@@ -645,7 +651,7 @@ try {
                         throw 'ORCHESTRA_EXTERNAL: git read-tree HEAD failed.'
                     }
                 }
-                $addRun = Invoke-GitCommand -GitExe $gitExe -RepoRoot $repoRoot -IndexFile $tempIndex -Arguments (@('add', '-A', '--') + $effectiveManagedRels)
+                $addRun = Invoke-GitCommand -GitExe $gitExe -RepoRoot $repoRoot -IndexFile $tempIndex -Arguments (@('add', '-A', '--') + $effectiveManagedRels + @(':(exclude)registry/.registry.lock'))
                 if ($addRun.exit_code -ne 0) {
                     throw 'ORCHESTRA_EXTERNAL: git add on isolated index failed.'
                 }

@@ -1368,8 +1368,8 @@ exit 0
     $pruneState = Join-Path $sandbox 'prune-state'
     $pruneLive = Join-Path $pruneState 'live'
     [void][IO.Directory]::CreateDirectory($pruneLive)
-    $staleEventLog = Join-Path $pruneLive 'stale-run.events.jsonl'
-    $freshEventLog = Join-Path $pruneLive 'fresh-run.events.jsonl'
+    $staleEventLog = Join-Path $pruneLive '11111111-1111-1111-1111-111111111111.events.jsonl'
+    $freshEventLog = Join-Path $pruneLive '22222222-2222-2222-2222-222222222222.events.jsonl'
     [IO.File]::WriteAllText($staleEventLog, '{"event":"init"}' + "`n", $script:OrchestraUtf8)
     [IO.File]::WriteAllText($freshEventLog, '{"event":"init"}' + "`n", $script:OrchestraUtf8)
     [IO.File]::SetLastWriteTimeUtc($staleEventLog, (Get-OrchestraNow).AddDays(-8))
@@ -1995,9 +1995,14 @@ service_tier = "ignored-hook-tier"
         'multi_agent', 'shell_snapshot', 'skill_search',
         'skill_mcp_dependency_install', 'tool_suggest',
         'tool_call_mcp_elicitation', 'deferred_tool_world_state',
-        'image_generation', 'guardian_approval'
+        'image_generation', 'guardian_approval',
+        'hooks', 'sleep_tool', 'plugin_sharing',
+        'browser_annotation_api', 'browser_use_full_cdp_access',
+        'goals', 'bedrock_setup_wizard',
+        'mcp_oauth_refresh_coordination', 'workspace_dependencies',
+        'view_image'
     )
-    Assert-Test 'Codex pure-brain extracts scalar config.toml overrides, ignores MCP/auth.json, emits --ignore-user-config --ignore-rules, and trims 22 stealth features' (
+    Assert-Test 'Codex pure-brain extracts scalar config.toml overrides, ignores MCP/auth.json, emits --ignore-user-config --ignore-rules, and trims 32 stealth features' (
         $parsedCfg.model_provider -eq 'custom-proxy' -and
         $parsedCfg.forced_login_method -eq 'chatgpt' -and
         $parsedCfg.service_tier -eq 'fast' -and
@@ -2014,6 +2019,8 @@ service_tier = "ignored-hook-tier"
         ($cfgDryArgv -contains 'skip_host_skill_discovery') -and
         ($cfgDryArgv -contains 'omit_skill_descriptions') -and
         (@($expectedStealthDisables | Where-Object { $cfgDryArgv -notcontains $_ }).Count -eq 0) -and
+        ($cfgDryArgv -notcontains 'code_mode_host') -and
+        ($cfgDryArgv -notcontains 'code_mode_interrupt') -and
         ($cfgDryArgv -contains 'shell_tool') -and
         ($cfgDryArgv -contains 'unified_exec') -and
         (-not ($cfgDryArgv -match 'mcp_servers|ignored-'))
@@ -2427,6 +2434,250 @@ exit 0
         ($filteredDefault -contains 'image_generation') -and
         ($filteredImgGen -notcontains 'image_generation') -and
         ($filteredImgGen -contains 'plugins')
+    )
+
+    # (t) Rev 14: Cross-StateDir shared .registry.lock
+    $sharedRegFile = Join-Path $sandbox 'shared-lock-reg\models.json'
+    $pLockA = Get-OrchestraPaths -RegistryPath $sharedRegFile -StateDir (Join-Path $sandbox 'lock-state-a')
+    $pLockB = Get-OrchestraPaths -RegistryPath $sharedRegFile -StateDir (Join-Path $sandbox 'lock-state-b')
+    $regKeyA = Get-OrchestraLockKey -Paths $pLockA -Name 'registry'
+    $regKeyB = Get-OrchestraLockKey -Paths $pLockB -Name 'registry'
+    $stateKeyA = Get-OrchestraLockKey -Paths $pLockA -Name 'state'
+    $stateKeyB = Get-OrchestraLockKey -Paths $pLockB -Name 'state'
+    $crossStateHeld = Invoke-WithLock -Paths $pLockA -Name 'registry' -ScriptBlock {
+        return (Test-OrchestraLockHeld -Paths $pLockB -Name 'registry')
+    }
+    Assert-Test 'Cross-StateDir registry lock resolves to shared RegistryDir\.registry.lock while state lock stays isolated' (
+        $regKeyA -eq $regKeyB -and
+        $regKeyA -eq ([IO.Path]::GetFullPath((Join-Path $pLockA.RegistryDir '.registry.lock')).ToLowerInvariant()) -and
+        $stateKeyA -ne $stateKeyB -and
+        $crossStateHeld -eq $true -and
+        [IO.File]::Exists($regKeyA)
+    )
+
+    # (u) Rev 14: Get-CodexSupportedFeatures fail-open @{}, -NoStateCache cache read, and view_image UI/image exemption
+    $brokenCodexExe = Join-Path $sandbox 'broken-codex-probe.exe'
+    [IO.File]::WriteAllBytes($brokenCodexExe, [byte[]]@(1, 2, 3, 4))
+    $brokenFeatMap = Get-CodexSupportedFeatures -Executable $brokenCodexExe -Paths $fcPaths
+    $brokenStealth = @(Get-CodexStealthArguments -SupportedFeatures $brokenFeatMap -Tags @('backend'))
+
+    $adhocCacheExe = Join-Path $sandbox 'adhoc-cached-codex.exe'
+    [IO.File]::WriteAllBytes($adhocCacheExe, [byte[]]@(5, 6, 7, 8, 9))
+    $adhocItem = Get-Item -LiteralPath $adhocCacheExe
+    $adhocFcPaths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir (Join-Path $sandbox 'adhoc-fc-state')
+    Invoke-WithLock -Paths $adhocFcPaths -Name state -ScriptBlock {
+        $afs = Read-State -Paths $adhocFcPaths
+        Set-OrchestraProperty $afs 'codex_features_cache' ([pscustomobject]@{
+            path = $adhocItem.FullName
+            length = [long]$adhocItem.Length
+            last_write_utc = $adhocItem.LastWriteTimeUtc.ToString('o')
+            features = @('plugins', 'hooks', 'sleep_tool', 'view_image')
+            checked_utc = (Get-OrchestraNow).ToString('o')
+        })
+        Save-State -Paths $adhocFcPaths -State $afs
+    }
+    $adhocFeatMap = Get-CodexSupportedFeatures -Executable $adhocCacheExe -Paths $adhocFcPaths -NoStateCache
+    $viewImgExemptOk = $true
+    foreach ($uiTag in @('image_gen', 'frontend', 'ui', 'landing_page', 'office', 'ppt')) {
+        $uiArgs = @(Get-CodexStealthArguments -SupportedFeatures $null -Tags @($uiTag))
+        if ($uiArgs -contains 'view_image') { $viewImgExemptOk = $false }
+    }
+    $backendViewImg = (@(Get-CodexStealthArguments -SupportedFeatures $null -Tags @('backend')) -contains 'view_image')
+    Assert-Test 'Get-CodexSupportedFeatures returns @{} on failed .exe, reads cache under -NoStateCache, and exempts view_image for UI/image/office tags' (
+        $null -ne $brokenFeatMap -and
+        $brokenFeatMap -is [hashtable] -and
+        $brokenFeatMap.Count -eq 0 -and
+        $brokenStealth.Count -eq 0 -and
+        $null -ne $adhocFeatMap -and
+        $adhocFeatMap.ContainsKey('hooks') -and
+        $adhocFeatMap.ContainsKey('sleep_tool') -and
+        $viewImgExemptOk -and
+        $backendViewImg
+    )
+
+    # (v) Rev 14: -AgySettings, timings_ms telemetry, and >7d live/*.json + *.response.md pruning
+    $agySettingsReject = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gpt-6-astra', '-Prompt', 'TEST', '-AgySettings', '{"model":"x"}', '-DryRun')
+    )
+    $agySettingsDry = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gemini-4-carbon', '-Prompt', 'TEST', '-AgySettings', '{"disableAllHooks":true}', '-DryRun')
+    )
+    $dryArgvSettings = @($agySettingsDry.json.arguments)
+    $settingsIdx = [Array]::IndexOf($dryArgvSettings, '--settings')
+
+    $pruneState = Join-Path $sandbox 'rev14-prune-state'
+    $pruneLive = Join-Path $pruneState 'live'
+    [void][IO.Directory]::CreateDirectory($pruneLive)
+    $oldTs = (Get-OrchestraNow).AddDays(-8).ToUniversalTime()
+    $freshTs = (Get-OrchestraNow).AddDays(-1).ToUniversalTime()
+    $oldGuid = [Guid]::NewGuid().ToString()
+    $freshGuid = [Guid]::NewGuid().ToString()
+    $oldStatusFile = Join-Path $pruneLive ($oldGuid + '.json')
+    $oldSpillFile = Join-Path $pruneLive ($oldGuid + '.response.md')
+    $oldEvFile = Join-Path $pruneLive ($oldGuid + '.events.jsonl')
+    $customKeepJson = Join-Path $pruneLive 'custom-keep.json'
+    $customKeepResp = Join-Path $pruneLive 'custom-keep.response.md'
+    $oldLatestCodex = Join-Path $pruneLive 'latest-codex.json'
+    $oldLatestAgy = Join-Path $pruneLive 'latest-agy.json'
+    $freshStatusFile = Join-Path $pruneLive ($freshGuid + '.json')
+    foreach ($fp in @($oldStatusFile, $oldSpillFile, $oldEvFile, $customKeepJson, $customKeepResp, $oldLatestCodex, $oldLatestAgy, $freshStatusFile)) {
+        [IO.File]::WriteAllText($fp, '{}', $script:OrchestraUtf8)
+    }
+    foreach ($fp in @($oldStatusFile, $oldSpillFile, $oldEvFile, $customKeepJson, $customKeepResp, $oldLatestCodex, $oldLatestAgy)) {
+        [IO.File]::SetLastWriteTimeUtc($fp, $oldTs)
+    }
+    [IO.File]::SetLastWriteTimeUtc($freshStatusFile, $freshTs)
+
+    $prevWrapperRev14 = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_AGY_WRAPPER')
+    $pruneRun = $null
+    try {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_AGY_WRAPPER', $wrapperPath)
+        $pruneRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+            '-RegistryPath', $fixtureRegistry, '-StateDir', $pruneState,
+            '-WorkDir', $sandbox, '-Model', 'gemini-4-carbon',
+            '-Prompt', 'TEST_SUCCESS'
+        )
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_AGY_WRAPPER', $prevWrapperRev14)
+    }
+    $tmLive = $pruneRun.json.timings_ms
+    $tmDry = $agySettingsDry.json.timings_ms
+    Assert-Test '-AgySettings rejects non-agy, forwards --settings on agy, emits timings_ms, and prunes only >7d GUID live files' (
+        $agySettingsReject.code -eq 2 -and
+        $agySettingsReject.json.error -match 'ORCHESTRA_ARGS' -and
+        $agySettingsDry.code -eq 0 -and
+        $settingsIdx -ge 0 -and
+        $dryArgvSettings[$settingsIdx + 1] -eq '{"disableAllHooks":true}' -and
+        $null -ne $tmDry -and [double]$tmDry.total_ms -ge 0 -and [int]$tmDry.stagger_ms -eq 0 -and $null -eq $tmDry.spawn_to_first_event_ms -and
+        $pruneRun.code -eq 0 -and
+        $null -ne $tmLive -and
+        [double]$tmLive.slot_wait_ms -ge 0 -and
+        [int]$tmLive.stagger_ms -ge 0 -and
+        [double]$tmLive.spawn_to_first_event_ms -ge 0 -and
+        [double]$tmLive.first_event_to_done_ms -ge 0 -and
+        [double]$tmLive.total_ms -ge ([double]$tmLive.spawn_to_first_event_ms + [double]$tmLive.first_event_to_done_ms - 0.5) -and
+        (-not [IO.File]::Exists($oldStatusFile)) -and
+        (-not [IO.File]::Exists($oldSpillFile)) -and
+        (-not [IO.File]::Exists($oldEvFile)) -and
+        [IO.File]::Exists($customKeepJson) -and
+        [IO.File]::Exists($customKeepResp) -and
+        [IO.File]::Exists($oldLatestCodex) -and
+        [IO.File]::Exists($oldLatestAgy) -and
+        [IO.File]::Exists($freshStatusFile)
+    )
+
+    # (w) Rev 14: New-OutcomeStatsIndex narrower/oversized WindowDays, Add-ChangelogEntry LF newline, and ReadOnly cooldown
+    $idxTestEvents = @(
+        [pscustomobject]@{ type = 'invocation'; invocation_id = 'i1'; model = 'm1'; ts = (Get-OrchestraNow).AddDays(-2).ToString('o'); tags = @('backend') }
+        [pscustomobject]@{ type = 'outcome'; invocation_id = 'i1'; outcome = 'ok' }
+        [pscustomobject]@{ type = 'invocation'; invocation_id = 'i2'; model = 'm1'; ts = (Get-OrchestraNow).AddDays(-1).ToString('o'); tags = @('backend', 'math') }
+        [pscustomobject]@{ type = 'outcome'; invocation_id = 'i2'; outcome = 'fail' }
+        [pscustomobject]@{ type = 'invocation'; invocation_id = 'i3'; model = 'm1'; ts = (Get-OrchestraNow).ToString('o'); tags = @('math') }
+        [pscustomobject]@{ type = 'outcome'; invocation_id = 'i3'; outcome = 'fail' }
+    )
+    $statsDirect = Get-OutcomeStats -Events $idxTestEvents -ModelId 'm1' -WindowDays 30
+    $statsIndex = New-OutcomeStatsIndex -Events $idxTestEvents -WindowDays 30
+    $statsIndexed = Get-OutcomeStats -ModelId 'm1' -WindowDays 30 -Index $statsIndex
+    $statsTagIndexed = Get-OutcomeStats -ModelId 'm1' -Tags @('backend') -WindowDays 30 -Index $statsIndex
+    $statsTagDirect = Get-OutcomeStats -Events $idxTestEvents -ModelId 'm1' -Tags @('backend') -WindowDays 30
+    $statsNarrowDirect = Get-OutcomeStats -Events $idxTestEvents -ModelId 'm1' -WindowDays 1
+    $statsNarrowIndexed = Get-OutcomeStats -ModelId 'm1' -WindowDays 1 -Index $statsIndex
+    $oversizeWindowThrew = $false
+    try {
+        $null = Get-OutcomeStats -ModelId 'm1' -WindowDays 31 -Index $statsIndex
+    }
+    catch {
+        if ($_.Exception.Message -match '^ORCHESTRA_ARGS:') { $oversizeWindowThrew = $true }
+    }
+
+    $lfLogPaths = Get-OrchestraPaths -RegistryPath (Join-Path $sandbox 'lf-cl\models.json') -StateDir (Join-Path $sandbox 'lf-cl\state')
+    Invoke-WithLock -Paths $lfLogPaths -Name 'registry' -ScriptBlock {
+        Add-ChangelogEntry -Paths $lfLogPaths -Title 'LF init' -Lines @('line 1')
+        Add-ChangelogEntry -Paths $lfLogPaths -Title 'LF next' -Lines @('line 2')
+    }
+    $lfText = [IO.File]::ReadAllText($lfLogPaths.Changelog, $script:OrchestraUtf8)
+
+    $roCooldownPaths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir (Join-Path $sandbox 'ro-cooldown-state')
+    [void][IO.Directory]::CreateDirectory($roCooldownPaths.Slots)
+    $roCooldownMeta = Join-Path $roCooldownPaths.Slots '_codex_rotation_cooldown.meta'
+    Write-JsonAtomic -Path $roCooldownMeta -Object ([ordered]@{ until_utc = (Get-OrchestraNow).AddMinutes(-1).ToString('o'); reason = 'expired' })
+    $roExpiredRes = Test-OrchestraCodexRotationCooldown -Paths $roCooldownPaths -ReadOnly
+
+    Assert-Test 'New-OutcomeStatsIndex matches Get-OutcomeStats including narrower windows and rejects oversized WindowDays, Add-ChangelogEntry uses LF, and ReadOnly cooldown preserves file' (
+        $statsIndexed.n -eq $statsDirect.n -and
+        $statsIndexed.ok -eq $statsDirect.ok -and
+        $statsIndexed.fail -eq $statsDirect.fail -and
+        $statsIndexed.consecutive_fail -eq $statsDirect.consecutive_fail -and
+        $statsTagIndexed.n -eq $statsTagDirect.n -and
+        $statsTagIndexed.consecutive_fail -eq $statsTagDirect.consecutive_fail -and
+        $statsNarrowIndexed.n -eq $statsNarrowDirect.n -and
+        $statsNarrowIndexed.ok -eq 0 -and
+        $statsNarrowIndexed.fail -eq 2 -and
+        $oversizeWindowThrew -eq $true -and
+        (-not $lfText.Contains("`r`n")) -and
+        $lfText.Contains("`n") -and
+        $roExpiredRes -eq $false -and
+        [IO.File]::Exists($roCooldownMeta)
+    )
+
+    # (x) Rev 14 wave 3: Resolve-CodexExe override cache non-poisoning + source=discovered + active_invocation_ids
+    $ovrCachePaths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir (Join-Path $sandbox 'rev14-ovr-cache-state')
+    $prevCodexOvrTest = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_CODEX')
+    $ovrResolvedPath = ''
+    $discTestOk = $true
+    try {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX', $fakeCodexPath)
+        $ovrResolvedPath = Resolve-CodexExe -Paths $ovrCachePaths
+        $stAfterOvr = Read-State -Paths $ovrCachePaths
+        $ovrCachedPath = [string](Get-OrchestraProperty $stAfterOvr.codex_exe_cache 'path' '')
+
+        # Also test that un-sourced/override codex_exe_cache is ignored when discovering real codex.exe
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX', $null)
+        $discPaths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir (Join-Path $sandbox 'rev14-disc-state')
+        $staleDummyExe = Join-Path $sandbox 'stale-legacy-codex.exe'
+        [IO.File]::WriteAllBytes($staleDummyExe, [byte[]]@(1, 2, 3, 4))
+        $staleItem = Get-Item -LiteralPath $staleDummyExe
+        Invoke-WithLock -Paths $discPaths -Name state -ScriptBlock {
+            $dst = Read-State -Paths $discPaths
+            Set-OrchestraProperty $dst 'codex_exe_cache' ([pscustomobject]@{
+                path = $staleDummyExe
+                version = '9.9.9'
+                length = [long]$staleItem.Length
+                last_write_utc = $staleItem.LastWriteTimeUtc.ToString('o')
+            })
+            Save-State -Paths $discPaths -State $dst
+        }
+        try {
+            $discPath = Resolve-CodexExe -Paths $discPaths
+            $stAfterDisc = Read-State -Paths $discPaths
+            $discSource = [string](Get-OrchestraProperty $stAfterDisc.codex_exe_cache 'source' '')
+            $discTestOk = ($discPath -ne $staleDummyExe) -and ($discSource -eq 'discovered')
+        }
+        catch {
+            # If host machine has no codex.exe installed, verify Resolve-CodexExe at least rejected stale un-sourced cache!
+            $discTestOk = ($_.Exception.Message -match 'No usable Codex')
+        }
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX', $prevCodexOvrTest)
+    }
+
+    $actIdPaths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir (Join-Path $sandbox 'rev14-act-ids-state')
+    $l1 = Acquire-OrchestraPoolSlot -Paths $actIdPaths -Pool 'codex_openai' -Limit 4 -InvocationId 'inv-id-1' -ModelId 'gpt-6-astra' -Channel 'codex' -NoWait
+    $l2 = Acquire-OrchestraPoolSlot -Paths $actIdPaths -Pool 'agy_google' -Limit 7 -InvocationId 'inv-id-2' -ModelId 'gemini-4-hydrogen' -Channel 'agy' -NoWait
+    $actStatusIds = Get-ActivePoolSlotStatus -Paths $actIdPaths
+    $actIdsArr = @($actStatusIds.active_invocation_ids)
+    Release-OrchestraPoolSlot -Paths $actIdPaths -LeasePath $l1.lease_path -InvocationId 'inv-id-1'
+    Release-OrchestraPoolSlot -Paths $actIdPaths -LeasePath $l2.lease_path -InvocationId 'inv-id-2'
+
+    Assert-Test 'Resolve-CodexExe avoids poisoning cache on override, requires source=discovered, and Get-ActivePoolSlotStatus exposes active_invocation_ids' (
+        $ovrResolvedPath -eq [IO.Path]::GetFullPath($fakeCodexPath) -and
+        $ovrCachedPath -eq '' -and
+        $discTestOk -and
+        $actIdsArr.Count -eq 2 -and
+        ($actIdsArr -contains 'inv-id-1') -and
+        ($actIdsArr -contains 'inv-id-2')
     )
 }
 catch {

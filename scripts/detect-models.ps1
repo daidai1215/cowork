@@ -177,10 +177,56 @@ function Get-DSourceData {
 }
 
 $paths = $null
-$leaseToken = $null
+$script:leaseToken = $null
 $owner = '{0}-{1}' -f [Environment]::MachineName, $PID
 $exitCode = 0
 $finalResult = $null
+
+function Get-DScanGate {
+    param(
+        $Registry,
+        $State,
+        [datetime]$NowUtc,
+        [bool]$IgnoreInterval
+    )
+    $currentLease = Get-DValue $State 'scan_lease'
+    $leaseUntil = Convert-DDate (Get-DValue $currentLease 'until')
+    if ($null -ne $leaseUntil -and $leaseUntil -gt $NowUtc) {
+        return [pscustomobject]@{
+            Skipped = $true; Due = @(); Token = $null
+            Reason = 'An unexpired scan lease is held.'
+        }
+    }
+    $policy = Get-DValue $Registry 'policy'
+    $scanHours = [double](Get-DValue $policy 'scan_interval_hours' 24)
+    $backoffHours = [double](Get-DValue $policy 'scan_failure_backoff_hours' 1)
+    $due = @(
+        foreach ($name in @('agy', 'codex')) {
+            $source = Initialize-DSource $State $name
+            $failures = [int](Get-DValue $source 'consecutive_failures' 0)
+            $lastSuccess = Convert-DDate (Get-DValue $source 'last_success')
+            $lastAttempt = Convert-DDate (Get-DValue $source 'last_attempt')
+            $shouldScan = $IgnoreInterval
+            if (-not $shouldScan) {
+                if ($failures -gt 0 -and $null -ne $lastAttempt) {
+                    $shouldScan = $NowUtc -ge $lastAttempt.AddHours($backoffHours)
+                }
+                elseif ($null -eq $lastSuccess) { $shouldScan = $true }
+                else { $shouldScan = $NowUtc -ge $lastSuccess.AddHours($scanHours) }
+            }
+            if ($shouldScan) { $name }
+        }
+    )
+    if ($due.Count -eq 0) {
+        return [pscustomobject]@{
+            Skipped = $true; Due = @(); Token = $null
+            Reason = 'All sources are within their scan or retry interval.'
+        }
+    }
+    return [pscustomobject]@{
+        Skipped = $false; Due = @($due); Token = $null; Reason = $null
+    }
+}
 
 try {
     if ($AgyTimeoutSec -lt 1) {
@@ -189,51 +235,37 @@ try {
     $paths = Get-OrchestraPaths -RegistryPath $RegistryPath -StateDir $StateDir
     $now = (Get-OrchestraNow).ToUniversalTime()
     $nowText = $now.ToString('o')
-    $lease = Invoke-WithLock -Paths $paths -Name registry -ScriptBlock {
-        $registry = Read-Registry -Paths $paths
-        Invoke-WithLock -Paths $paths -Name state -ScriptBlock {
-            $state = Read-State -Paths $paths
-            $currentLease = Get-DValue $state 'scan_lease'
-            $leaseUntil = Convert-DDate (Get-DValue $currentLease 'until')
-            if ($null -ne $leaseUntil -and $leaseUntil -gt $now) {
-                return [pscustomobject]@{
-                    Skipped = $true; Due = @(); Token = $null
-                    Reason = 'An unexpired scan lease is held.'
-                }
+    $lease = $null
+    if (-not $Force -and [IO.File]::Exists($paths.State)) {
+        try {
+            $fastReg = Read-Registry -Paths $paths
+            $fastState = Read-State -Paths $paths
+            $fastGate = Get-DScanGate -Registry $fastReg -State $fastState -NowUtc $now -IgnoreInterval:$false
+            if ($fastGate.Skipped) {
+                $lease = $fastGate
             }
-            $policy = Get-DValue $registry 'policy'
-            $scanHours = [double](Get-DValue $policy 'scan_interval_hours' 24)
-            $backoffHours = [double](Get-DValue $policy 'scan_failure_backoff_hours' 1)
-            $due = @(
-                foreach ($name in @('agy', 'codex')) {
-                    $source = Initialize-DSource $state $name
-                    $failures = [int](Get-DValue $source 'consecutive_failures' 0)
-                    $lastSuccess = Convert-DDate (Get-DValue $source 'last_success')
-                    $lastAttempt = Convert-DDate (Get-DValue $source 'last_attempt')
-                    $shouldScan = [bool]$Force
-                    if (-not $shouldScan) {
-                        if ($failures -gt 0 -and $null -ne $lastAttempt) {
-                            $shouldScan = $now -ge $lastAttempt.AddHours($backoffHours)
-                        }
-                        elseif ($null -eq $lastSuccess) { $shouldScan = $true }
-                        else { $shouldScan = $now -ge $lastSuccess.AddHours($scanHours) }
-                    }
-                    if ($shouldScan) { $name }
+        }
+        catch {
+            $lease = $null
+        }
+    }
+    if ($null -eq $lease) {
+        $lease = Invoke-WithLock -Paths $paths -Name registry -ScriptBlock {
+            $registry = Read-Registry -Paths $paths
+            Invoke-WithLock -Paths $paths -Name state -ScriptBlock {
+                $state = Read-State -Paths $paths
+                $gate = Get-DScanGate -Registry $registry -State $state -NowUtc $now -IgnoreInterval ([bool]$Force)
+                if ($gate.Skipped) {
+                    return $gate
                 }
-            )
-            if ($due.Count -eq 0) {
-                return [pscustomobject]@{
-                    Skipped = $true; Due = @(); Token = $null
-                    Reason = 'All sources are within their scan or retry interval.'
+                $token = $now.AddMinutes(10).ToString('o')
+                Set-DValue $state 'scan_lease' ([pscustomobject]@{
+                    owner = $owner; until = $token
+                })
+                Save-State -Paths $paths -State $state | Out-Null
+                [pscustomobject]@{
+                    Skipped = $false; Due = @($gate.Due); Token = $token; Reason = $null
                 }
-            }
-            $token = $now.AddMinutes(10).ToString('o')
-            Set-DValue $state 'scan_lease' ([pscustomobject]@{
-                owner = $owner; until = $token
-            })
-            Save-State -Paths $paths -State $state | Out-Null
-            [pscustomobject]@{
-                Skipped = $false; Due = @($due); Token = $token; Reason = $null
             }
         }
     }
@@ -249,7 +281,7 @@ try {
         }
     }
     else {
-        $leaseToken = $lease.Token
+        $script:leaseToken = $lease.Token
         $sourceResults = @{}
         foreach ($name in @($lease.Due)) {
             try {
@@ -275,7 +307,7 @@ try {
                 $state = Read-State -Paths $paths
                 $currentLease = Get-DValue $state 'scan_lease'
                 if ((Get-DValue $currentLease 'owner') -ne $owner -or
-                    (Get-DValue $currentLease 'until') -ne $leaseToken) {
+                    (Get-DValue $currentLease 'until') -ne $script:leaseToken) {
                     throw 'The scan lease was replaced before commit.'
                 }
                 $newIds = New-Object 'System.Collections.Generic.List[string]'
@@ -393,6 +425,7 @@ try {
                 if ($attempted -gt 0) { Set-DValue $state 'last_scan' $nowText }
                 Set-DValue $state 'scan_lease' $null
                 Save-State -Paths $paths -State $state | Out-Null
+                $script:leaseToken = $null
                 [ordered]@{
                     skipped = ($attempted -eq 0)
                     new = @($newIds.ToArray() | Sort-Object -Unique)
@@ -424,13 +457,13 @@ catch {
     }
 }
 finally {
-    if ($null -ne $paths -and $null -ne $leaseToken) {
+    if ($null -ne $paths -and $null -ne $script:leaseToken) {
         try {
             Invoke-WithLock -Paths $paths -Name state -ScriptBlock {
                 $state = Read-State -Paths $paths
                 $currentLease = Get-DValue $state 'scan_lease'
                 if ((Get-DValue $currentLease 'owner') -eq $owner -and
-                    (Get-DValue $currentLease 'until') -eq $leaseToken) {
+                    (Get-DValue $currentLease 'until') -eq $script:leaseToken) {
                     Set-DValue $state 'scan_lease' $null
                     Save-State -Paths $paths -State $state | Out-Null
                 }

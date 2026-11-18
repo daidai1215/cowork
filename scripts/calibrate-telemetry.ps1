@@ -43,6 +43,12 @@ try {
     $paths = Get-OrchestraPaths -RegistryPath $RegistryPath -StateDir $StateDir
     $registry = Read-Registry -Paths $paths
     $events = @(Read-UsageEvents -Paths $paths -SinceDays 0)
+    $statsIndex = if (Get-Command New-OutcomeStatsIndex -ErrorAction SilentlyContinue) {
+        New-OutcomeStatsIndex -Events $events -WindowDays $WindowDays
+    }
+    else {
+        $null
+    }
     $now = Get-OrchestraNow
     $since = $now.AddDays(-$WindowDays)
     $policy = Get-OrchestraProperty $registry 'policy' $null
@@ -169,7 +175,12 @@ try {
             )
             if ($dimTags.Count -eq 0) { continue }
 
-            $stats = Get-OutcomeStats -Events $events -ModelId $id -Tags $dimTags -WindowDays $WindowDays
+            $stats = if ($null -ne $statsIndex) {
+                Get-OutcomeStats -Index $statsIndex -ModelId $id -Tags $dimTags -WindowDays $WindowDays
+            }
+            else {
+                Get-OutcomeStats -Events $events -ModelId $id -Tags $dimTags -WindowDays $WindowDays
+            }
             if ([int]$stats.n -lt $minSamples -or [int]$stats.n -le 0) { continue }
 
             $badRate = ([int]$stats.redo + [int]$stats.fail) / [double]$stats.n

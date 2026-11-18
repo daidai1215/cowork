@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
 Synchronize or verify managed roster and routing blocks across cowork docs.
 .DESCRIPTION
@@ -22,24 +22,59 @@ function U {
     return [regex]::Unescape($Escaped)
 }
 
+$script:RouteCapabilityCache = @{}
+
+function Get-RouteCapabilities {
+    param([string]$RouteScript)
+    $key = [IO.Path]::GetFullPath($RouteScript)
+    if ($script:RouteCapabilityCache.ContainsKey($key)) {
+        return $script:RouteCapabilityCache[$key]
+    }
+    $supportsFast = $false
+    $cmd = Get-Command -Name $key -ErrorAction SilentlyContinue
+    if ($null -ne $cmd -and $null -ne $cmd.Parameters -and $cmd.Parameters.Count -gt 0) {
+        $supportsFast = ($cmd.Parameters.ContainsKey('RegistryObject') -and $cmd.Parameters.ContainsKey('SkipTelemetry'))
+    }
+    else {
+        $parseTokens = $null
+        $parseErrors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseFile($key, [ref]$parseTokens, [ref]$parseErrors)
+        if ($null -ne $ast -and $null -ne $ast.ParamBlock) {
+            $paramNames = @($ast.ParamBlock.Parameters | ForEach-Object { [string]$_.Name.VariablePath.UserPath })
+            $supportsFast = (($paramNames -contains 'RegistryObject') -and ($paramNames -contains 'SkipTelemetry'))
+        }
+    }
+    $script:RouteCapabilityCache[$key] = $supportsFast
+    return $supportsFast
+}
+
 function Invoke-CleanRoute {
     param(
         [string]$RouteScript,
         [string]$TagsCsv,
         [string]$RegistryFile,
         [string]$EmptyStateDir,
-        [string]$ModeName = ''
+        [string]$ModeName = '',
+        $Registry = $null
     )
+    $supportsFast = Get-RouteCapabilities -RouteScript $RouteScript
+    $routeArgs = @{
+        Tags = $TagsCsv
+        RegistryPath = $RegistryFile
+        StateDir = $EmptyStateDir
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ModeName)) {
+        $routeArgs['Mode'] = $ModeName
+    }
+    if ($supportsFast -and $null -ne $Registry) {
+        $routeArgs['RegistryObject'] = $Registry
+        $routeArgs['SkipTelemetry'] = $true
+    }
     $savedOut = [Console]::Out
     $writer = New-Object IO.StringWriter
     [Console]::SetOut($writer)
     try {
-        if ([string]::IsNullOrWhiteSpace($ModeName)) {
-            & $RouteScript -Tags $TagsCsv -RegistryPath $RegistryFile -StateDir $EmptyStateDir
-        }
-        else {
-            & $RouteScript -Tags $TagsCsv -Mode $ModeName -RegistryPath $RegistryFile -StateDir $EmptyStateDir
-        }
+        & $RouteScript @routeArgs
     }
     finally {
         [Console]::SetOut($savedOut)
@@ -55,22 +90,7 @@ function Invoke-CleanRoute {
 
 function Format-RankLabel {
     param([int]$Rank, [string]$Kind)
-    if ($Kind -eq 'quota') {
-        switch ($Rank) {
-            1 { return '1 (scarce)' }
-            2 { return '2 (medium)' }
-            3 { return '3 (abundant)' }
-            default { return [string]$Rank }
-        }
-    }
-    else {
-        switch ($Rank) {
-            1 { return '1 (slower)' }
-            2 { return '2 (medium)' }
-            3 { return '3 (fastest)' }
-            default { return [string]$Rank }
-        }
-    }
+    return [string]$Rank
 }
 
 function Build-RosterBlock {
@@ -88,7 +108,7 @@ function Build-RosterBlock {
     )
     [void]$lines.Add('')
     [void]$lines.Add(
-        '| Model | ID / Channel | Effort | Top Strengths (>=9) | Quota | Speed | Traits |'
+        '|Model|ID (Ch)|Effort|Strengths (>=9)|Q|S|Traits|'
     )
     [void]$lines.Add('|---|---|---|---|---|---|---|')
 
@@ -100,7 +120,7 @@ function Build-RosterBlock {
         $effort = [string](Get-OrchestraProperty $invoke 'default_effort' 'high')
         $peakEffort = [string](Get-OrchestraProperty $invoke 'peak_effort' '')
         $effortCell = if (-not [string]::IsNullOrWhiteSpace($peakEffort) -and $peakEffort -cne $effort) {
-            '`{0}` (peak `{1}`)' -f $effort, $peakEffort
+            '`{0}`/`{1}`' -f $effort, $peakEffort
         }
         else {
             '`{0}`' -f $effort
@@ -120,7 +140,7 @@ function Build-RosterBlock {
         $orderedCaps = @(
             $topCaps.ToArray() |
                 Sort-Object @{ Expression = { $_.score }; Descending = $true }, @{ Expression = { $_.dim }; Ascending = $true } |
-                ForEach-Object { '{0} ({1})' -f $_.dim, $_.score }
+                ForEach-Object { '{0}({1})' -f $_.dim, $_.score }
         )
         $capText = if ($orderedCaps.Count -gt 0) { $orderedCaps -join ', ' } else { '-' }
 
@@ -129,16 +149,16 @@ function Build-RosterBlock {
             [void]$traits.Add('Review only')
         }
         if ([bool](Get-OrchestraProperty $invoke 'account_rotation' $false)) {
-            [void]$traits.Add('Cockpit rotation')
+            [void]$traits.Add('Cockpit')
         }
         $tools = @(Get-OrchestraArray $model 'tools')
         if ($tools.Count -gt 0) {
-            [void]$traits.Add(('tools: `' + ($tools -join '`, `') + '`'))
+            [void]$traits.Add(('`' + ($tools -join '`, `') + '`'))
         }
         $traitText = if ($traits.Count -gt 0) { $traits -join '; ' } else { '-' }
 
         [void]$lines.Add((
-            '| **{0}** | `{1}` (`{2}`) | {3} | {4} | {5} | {6} | {7} |' -f
+            '|**{0}**|`{1}` (`{2}`)|{3}|{4}|{5}|{6}|{7}|' -f
             $display, $id, $channel, $effortCell, $capText,
             (Format-RankLabel $qRank 'quota'),
             (Format-RankLabel $sRank 'speed'),
@@ -146,32 +166,18 @@ function Build-RosterBlock {
         ))
     }
 
-    $quotaOrder = @(
-        $active |
-            Sort-Object @{ Expression = { [int](Get-OrchestraProperty $_ 'quota_rank' 2) }; Ascending = $true }, @{ Expression = { [string]$_.id }; Ascending = $true } |
-            ForEach-Object { '`{0}`' -f $_.id }
-    ) -join ' < '
-
-    $speedOrder = @(
-        $active |
-            Sort-Object @{ Expression = { [int](Get-OrchestraProperty $_ 'speed_rank' 2) }; Descending = $true }, @{ Expression = { [string]$_.id }; Ascending = $true } |
-            ForEach-Object { '`{0}`' -f $_.id }
-    ) -join ' > '
-
-    [void]$lines.Add('')
-    [void]$lines.Add(('- **Quota (Low->High)**: ' + $quotaOrder))
-    [void]$lines.Add(('- **Speed (Fast->Slow)**: ' + $speedOrder))
     $policyObj = Get-OrchestraProperty $Registry 'policy'
     $poolLimitsObj = Get-OrchestraProperty $policyObj 'pool_concurrency_limits'
     if ($null -ne $poolLimitsObj) {
         $poolPairs = @(
             foreach ($pKey in @('codex_openai', 'agy_anthropic', 'agy_google')) {
                 $pVal = Get-OrchestraProperty $poolLimitsObj $pKey
-                if ($null -ne $pVal) { '`{0}` <= {1}' -f $pKey, [int]$pVal }
+                if ($null -ne $pVal) { '`{0}`<={1}' -f $pKey, [int]$pVal }
             }
         )
         if ($poolPairs.Count -gt 0) {
-            [void]$lines.Add(('- **Pool Limits**: ' + ($poolPairs -join ', ')))
+            [void]$lines.Add('')
+            [void]$lines.Add(('- **Pools**: ' + ($poolPairs -join ', ')))
         }
     }
     return ($lines.ToArray() -join "`n")
@@ -197,7 +203,7 @@ function Build-RoutingBlock {
             Sort-Object |
             ForEach-Object {
                 $target = [string](Get-OrchestraProperty $aliasesObj $_)
-                '`{0}` -> `{1}`' -f $_, $target
+                '`{0}`->`{1}`' -f $_, $target
             }
     )
 
@@ -209,7 +215,7 @@ function Build-RoutingBlock {
         [pscustomobject]@{ label = 'Paper/Prose'; tags = 'prose,paper' }
         [pscustomobject]@{ label = 'Image Gen'; tags = 'image_gen' }
         [pscustomobject]@{ label = 'Office/PPT'; tags = 'office,ppt' }
-        [pscustomobject]@{ label = 'Repo Research'; tags = 'research,long_context' }
+        [pscustomobject]@{ label = 'Research'; tags = 'research,long_context' }
     )
 
     $policyObj = Get-OrchestraProperty $Registry 'policy'
@@ -217,14 +223,13 @@ function Build-RoutingBlock {
     $defaultMode = [string](Get-OrchestraProperty $policyObj 'default_mode' 'peak')
 
     $lines = New-Object 'System.Collections.Generic.List[string]'
-    [void]$lines.Add(('- **Aliases**: ' + ($aliasPairs -join ', ')))
-    [void]$lines.Add(('- **Default Mode**: `' + $defaultMode + '` (peak capability, zero penalty)'))
+    [void]$lines.Add(('- **Mode**: `' + $defaultMode + '` | **Aliases**: ' + ($aliasPairs -join ', ')))
     [void]$lines.Add('')
-    [void]$lines.Add('| Scenario | `-Tags` | Primary | Reviewer | Polisher | Pattern |')
-    [void]$lines.Add('|---|---|---|---|---|---|')
 
+    $peakRows = New-Object 'System.Collections.Generic.List[object]'
+    $hasPolisher = $false
     foreach ($sc in $scenarios) {
-        $route = Invoke-CleanRoute -RouteScript $RouteScript -TagsCsv $sc.tags -RegistryFile $RegistryFile -EmptyStateDir $EmptyStateDir
+        $route = Invoke-CleanRoute -RouteScript $RouteScript -TagsCsv $sc.tags -RegistryFile $RegistryFile -EmptyStateDir $EmptyStateDir -Registry $Registry
         $pEffort = [string](Get-OrchestraProperty $route 'primary_effort' '')
         $primaryCell = if ([bool](Get-OrchestraProperty $route 'blocked' $false) -or $null -eq $route.primary) {
             'BLOCKED'
@@ -236,12 +241,26 @@ function Build-RoutingBlock {
             '`' + [string]$route.primary + '`'
         }
         $reviewerCell = if ($null -eq $route.reviewer) { '-' } else { '`' + [string]$route.reviewer + '`' }
-        $polisherCell = if ($null -eq $route.polisher) { '-' } else { '`' + [string]$route.polisher + '`' }
+        $polisherCell = if ($null -eq $route.polisher) { '-' } else { $hasPolisher = $true; '`' + [string]$route.polisher + '`' }
         $patternCell = '`' + [string](Get-OrchestraProperty $route 'pattern' 'solo') + '`'
-        [void]$lines.Add((
-            '| {0} | `{1}` | {2} | {3} | {4} | {5} |' -f
-            $sc.label, $sc.tags, $primaryCell, $reviewerCell, $polisherCell, $patternCell
-        ))
+        [void]$peakRows.Add([pscustomobject]@{
+            label = $sc.label; tags = $sc.tags; primary = $primaryCell; reviewer = $reviewerCell; polisher = $polisherCell; pattern = $patternCell
+        })
+    }
+
+    if ($hasPolisher) {
+        [void]$lines.Add('|`-Tags`|Primary|Reviewer|Polisher|Pattern|')
+        [void]$lines.Add('|---|---|---|---|---|')
+        foreach ($pr in $peakRows) {
+            [void]$lines.Add(('|`{0}`|{1}|{2}|{3}|{4}|' -f $pr.tags, $pr.primary, $pr.reviewer, $pr.polisher, $pr.pattern))
+        }
+    }
+    else {
+        [void]$lines.Add('|`-Tags`|Primary|Reviewer|Pattern|')
+        [void]$lines.Add('|---|---|---|---|')
+        foreach ($pr in $peakRows) {
+            [void]$lines.Add(('|`{0}`|{1}|{2}|{3}|' -f $pr.tags, $pr.primary, $pr.reviewer, $pr.pattern))
+        }
     }
 
     $modesObj = Get-OrchestraProperty $Registry 'modes'
@@ -249,51 +268,31 @@ function Build-RoutingBlock {
     if ($null -ne (Get-OrchestraProperty $modesObj 'fast_4h') -and $null -ne $fastMapObj) {
         $toM = [string](Get-OrchestraProperty $fastMapObj 'to_model' 'gemini-4-hydrogen')
         $fromM = [string](Get-OrchestraProperty $fastMapObj 'from_model' 'gemini-4-carbon')
-        $retainP = @(Get-OrchestraArray $fastMapObj 'retain_primary_tags' | ForEach-Object { [string]$_ }) -join '`, `'
-        $retainR = @(Get-OrchestraArray $fastMapObj 'retain_reviewer_tags' | ForEach-Object { [string]$_ }) -join '`, `'
+        $retainP = @(Get-OrchestraArray $fastMapObj 'retain_primary_tags' | ForEach-Object { [string]$_ }) -join '/'
+        $retainR = @(Get-OrchestraArray $fastMapObj 'retain_reviewer_tags' | ForEach-Object { [string]$_ }) -join '/'
         [void]$lines.Add('')
-        [void]$lines.Add(('- **`-Mode fast_4h`**: `' + $fromM + '`->`' + $toM + '` (`xhigh`), keeping `' + $fromM + '` for `' + $retainP + '`/`' + $retainR + '` & `-AllowEscalation`:'))
-        [void]$lines.Add('')
-        [void]$lines.Add('| Fast | `-Tags` | Primary | Reviewer | Escalate |')
-        [void]$lines.Add('|---|---|---|---|---|')
-        $fastScenarios = @(
-            [pscustomobject]@{ label = 'Frontend/UI'; tags = 'frontend,landing_page' }
-            [pscustomobject]@{ label = 'Repo Pre-Read'; tags = 'research,long_context' }
-            [pscustomobject]@{ label = 'Routine Docs'; tags = 'prose' }
-            [pscustomobject]@{ label = 'Paper/Long Prose'; tags = 'prose,paper' }
-            [pscustomobject]@{ label = 'Backend/Bugfix'; tags = 'bugfix' }
-            [pscustomobject]@{ label = 'Math/Algo'; tags = 'math,algorithm' }
-        )
-        foreach ($fsc in $fastScenarios) {
-            $fr = Invoke-CleanRoute -RouteScript $RouteScript -TagsCsv $fsc.tags -ModeName 'fast_4h' -RegistryFile $RegistryFile -EmptyStateDir $EmptyStateDir
-            $fpEff = [string](Get-OrchestraProperty $fr 'primary_effort' '')
-            $fpCell = Format-RouteModelCell -ModelName $fr.primary -Effort $fpEff -IsBlocked ([bool](Get-OrchestraProperty $fr 'blocked' $false)) -CheckBlocked $true
-            $frEff = [string](Get-OrchestraProperty $fr 'reviewer_effort' '')
-            $frCell = Format-RouteModelCell -ModelName $fr.reviewer -Effort $frEff
-            $feCell = if ($null -eq $fr.escalate_to) { '-' } else { '`' + [string]$fr.escalate_to + '`' }
-            [void]$lines.Add(('| {0} | `{1}` | {2} | {3} | {4} |' -f $fsc.label, $fsc.tags, $fpCell, $frCell, $feCell))
-        }
+        [void]$lines.Add(('- **`-Mode fast_4h`**: `' + $fromM + '`->`' + $toM + '` (`xhigh`), except `' + $retainP + '` (`' + $retainR + '` rev) & `-AllowEscalation`.'))
     }
 
     $hostTierRows = @(
-        [pscustomobject]@{ host = 'orchestrator'; mode = 'orchestrator_fast'; label = 'Frontend/Dev'; tags = 'frontend,landing_page' }
-        [pscustomobject]@{ host = 'orchestrator'; mode = 'orchestrator_fast'; label = 'Architecture'; tags = 'architecture' }
-        [pscustomobject]@{ host = 'carbon'; mode = 'carbon_peak'; label = 'Flagship'; tags = 'frontend,landing_page' }
-        [pscustomobject]@{ host = 'carbon'; mode = 'carbon_peak'; label = 'Bulk/Scan'; tags = 'bulk,scan' }
-        [pscustomobject]@{ host = 'hydrogen'; mode = 'hydrogen_max'; label = 'Bugfix'; tags = 'bugfix' }
-        [pscustomobject]@{ host = 'hydrogen'; mode = 'hydrogen_max'; label = 'Paper Gate'; tags = 'prose,paper' }
+        [pscustomobject]@{ host = 'orchestrator'; mode = 'orchestrator_fast'; tags = 'frontend,landing_page' }
+        [pscustomobject]@{ host = 'orchestrator'; mode = 'orchestrator_fast'; tags = 'architecture' }
+        [pscustomobject]@{ host = 'carbon'; mode = 'carbon_peak'; tags = 'frontend,landing_page' }
+        [pscustomobject]@{ host = 'carbon'; mode = 'carbon_peak'; tags = 'bulk,scan' }
+        [pscustomobject]@{ host = 'hydrogen'; mode = 'hydrogen_max'; tags = 'bugfix' }
+        [pscustomobject]@{ host = 'hydrogen'; mode = 'hydrogen_max'; tags = 'prose,paper' }
     ) | Where-Object { $null -ne (Get-OrchestraProperty $modesObj $_.mode) }
 
     if (@($hostTierRows).Count -gt 0) {
         [void]$lines.Add('')
         [void]$lines.Add(
-            '- **Host Tiers (`-HostModel orchestrator|carbon|hydrogen`)**: `orchestrator_fast` / `carbon_peak` / `hydrogen_max` (4H: `scan`->`medium`, `bulk/boilerplate/test_gen`->`high`, else `xhigh`):'
+            '- **Host Tiers (`-HostModel`)**: `orchestrator_fast`/`carbon_peak`/`hydrogen_max` (`4H`: `scan`->`med`, `bulk`/`boilerplate`/`test_gen`->`high`, else `xhigh`):'
         )
         [void]$lines.Add('')
-        [void]$lines.Add('| Host | Scenario | `-Tags` | Primary | Reviewer | Final Gate |')
-        [void]$lines.Add('|---|---|---|---|---|---|')
+        [void]$lines.Add('|Host|`-Tags`|Primary|Reviewer|Gate|')
+        [void]$lines.Add('|---|---|---|---|---|')
         foreach ($row in $hostTierRows) {
-            $hr = Invoke-CleanRoute -RouteScript $RouteScript -TagsCsv $row.tags -ModeName $row.mode -RegistryFile $RegistryFile -EmptyStateDir $EmptyStateDir
+            $hr = Invoke-CleanRoute -RouteScript $RouteScript -TagsCsv $row.tags -ModeName $row.mode -RegistryFile $RegistryFile -EmptyStateDir $EmptyStateDir -Registry $Registry
             $hpEff = [string](Get-OrchestraProperty $hr 'primary_effort' '')
             $hpCell = Format-RouteModelCell -ModelName $hr.primary -Effort $hpEff -IsBlocked ([bool](Get-OrchestraProperty $hr 'blocked' $false)) -CheckBlocked $true
             $hrEff = [string](Get-OrchestraProperty $hr 'reviewer_effort' '')
@@ -301,8 +300,8 @@ function Build-RoutingBlock {
             $orchObj = Get-OrchestraProperty $hr 'orchestration'
             $finRev = [string](Get-OrchestraProperty $orchObj 'final_reviewer' '')
             $hfCell = if ([string]::IsNullOrWhiteSpace($finRev)) { '-' } else { '`' + $finRev + '`' }
-            $modeCell = '`{0}` -> `{1}`' -f $row.host, $row.mode
-            [void]$lines.Add(('| {0} | {1} | `{2}` | {3} | {4} | {5} |' -f $modeCell, $row.label, $row.tags, $hpCell, $hrCell, $hfCell))
+            $modeCell = '`{0}`' -f $row.host
+            [void]$lines.Add(('|{0}|`{1}`|{2}|{3}|{4}|' -f $modeCell, $row.tags, $hpCell, $hrCell, $hfCell))
         }
     }
     return ($lines.ToArray() -join "`n")
@@ -310,12 +309,17 @@ function Build-RoutingBlock {
 
 function Build-ProfilesBlock {
     param($Registry)
+    $rev = [long](Get-OrchestraProperty $Registry 'registry_rev' 0)
     $dimensions = @(Get-OrchestraArray $Registry 'cap_dimensions')
     $active = @(
         @(Get-OrchestraArray $Registry 'models') |
             Where-Object { [string](Get-OrchestraProperty $_ 'status') -eq 'active' }
     )
     $lines = New-Object 'System.Collections.Generic.List[string]'
+    [void]$lines.Add(
+        '> Auto-synced from `registry/models.json` (`registry_rev: ' + $rev + '`, active: ' + $active.Count + ')'
+    )
+    [void]$lines.Add('')
     $idx = 0
     foreach ($model in $active) {
         $idx++
@@ -462,29 +466,43 @@ try {
         }
         $original = [IO.File]::ReadAllText($fullPath, $script:OrchestraUtf8)
         $newline = if ($original.Contains("`r`n")) { "`r`n" } else { "`n" }
+        $finalDocContent = $original
+        $markerBlocks = @{
+            ROSTER = $rosterBlock
+            ROUTING = $routingBlock
+            PROFILES = $profilesBlock
+        }
+        $requiredMarkers = if ($rel -eq 'references\model-profiles.md') { @('PROFILES') } else { @('ROSTER', 'ROUTING') }
+        $optionalMarkers = if ($rel -eq 'references\model-profiles.md') { @('ROSTER', 'ROUTING') } else { @('PROFILES') }
+        $markerFailed = $false
 
-        $step1 = Update-ManagedSection -Content $original -MarkerName 'ROSTER' -NewInner $rosterBlock -Newline $newline
-        if (-not $step1.ok) {
-            [void]$drifted.Add($rel)
-            [void]$details.Add([pscustomobject]@{ file = $rel; status = 'missing_marker'; detail = $step1.reason })
-            continue
-        }
-        $step2 = Update-ManagedSection -Content $step1.content -MarkerName 'ROUTING' -NewInner $routingBlock -Newline $newline
-        if (-not $step2.ok) {
-            [void]$drifted.Add($rel)
-            [void]$details.Add([pscustomobject]@{ file = $rel; status = 'missing_marker'; detail = $step2.reason })
-            continue
-        }
-        $finalDocContent = $step2.content
-        if ($original.Contains('<!-- AUTO:PROFILES:START -->')) {
-            $step3 = Update-ManagedSection -Content $finalDocContent -MarkerName 'PROFILES' -NewInner $profilesBlock -Newline $newline
-            if (-not $step3.ok) {
+        foreach ($mName in $requiredMarkers) {
+            $step = Update-ManagedSection -Content $finalDocContent -MarkerName $mName -NewInner $markerBlocks[$mName] -Newline $newline
+            if (-not $step.ok) {
                 [void]$drifted.Add($rel)
-                [void]$details.Add([pscustomobject]@{ file = $rel; status = 'missing_marker'; detail = $step3.reason })
-                continue
+                [void]$details.Add([pscustomobject]@{ file = $rel; status = 'missing_marker'; detail = $step.reason })
+                $markerFailed = $true
+                break
             }
-            $finalDocContent = $step3.content
+            $finalDocContent = $step.content
         }
+        if ($markerFailed) { continue }
+
+        foreach ($mName in $optionalMarkers) {
+            $startTag = "<!-- AUTO:${mName}:START -->"
+            $endTag = "<!-- AUTO:${mName}:END -->"
+            if ($original.Contains($startTag) -or $original.Contains($endTag)) {
+                $step = Update-ManagedSection -Content $finalDocContent -MarkerName $mName -NewInner $markerBlocks[$mName] -Newline $newline
+                if (-not $step.ok) {
+                    [void]$drifted.Add($rel)
+                    [void]$details.Add([pscustomobject]@{ file = $rel; status = 'missing_marker'; detail = $step.reason })
+                    $markerFailed = $true
+                    break
+                }
+                $finalDocContent = $step.content
+            }
+        }
+        if ($markerFailed) { continue }
 
         if ($finalDocContent -cne $original) {
             [void]$drifted.Add($rel)

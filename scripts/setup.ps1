@@ -1113,10 +1113,14 @@ try {
             }
 
             if ($doProbe) {
-                $prRun = Invoke-ChildScriptJson -ScriptPath (Join-Path $PSScriptRoot 'probe-model.ps1') -Arguments @(
+                $probeArgs = @(
                     '-ModelId', $evalId, '-Grade',
                     '-RegistryPath', $paths.Registry, '-StateDir', $paths.StateDir
-                ) -WorkDir $paths.Root -TimeoutSec 2400
+                )
+                if (-not $isCanonicalRepo) {
+                    $probeArgs += @('-ReportDir', (Join-Path $paths.StateDir 'probe-results'))
+                }
+                $prRun = Invoke-ChildScriptJson -ScriptPath (Join-Path $PSScriptRoot 'probe-model.ps1') -Arguments $probeArgs -WorkDir $paths.Root -TimeoutSec 2400
                 if ($prRun.exit_code -eq 0 -and $null -ne $prRun.json) {
                     Invoke-WithLock -Paths $paths -Name registry -ScriptBlock {
                         $fReg = Read-Registry -Paths $paths

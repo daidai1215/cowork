@@ -14,6 +14,7 @@ $EXIT_QUOTA = 4
 $EXIT_LOCK = 5
 $script:OrchestraRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $script:OrchestraHeldLocks = @{}
+$script:CodexFeaturesMemCache = @{}
 
 function Get-OrchestraProperty {
     param($Object, [string]$Name, $Default = $null)
@@ -110,7 +111,33 @@ function Get-OrchestraPaths {
 function Read-JsonFile {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (-not [IO.File]::Exists($Path)) { return $null }
-    $text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    $text = $null
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $fs = $null
+        $sr = $null
+        try {
+            $fs = New-Object IO.FileStream(
+                $Path,
+                [IO.FileMode]::Open,
+                [IO.FileAccess]::Read,
+                ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+            )
+            $sr = New-Object IO.StreamReader($fs, [Text.Encoding]::UTF8, $true)
+            $text = $sr.ReadToEnd()
+            break
+        }
+        catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] {
+            return $null
+        }
+        catch [IO.IOException] {
+            if ($attempt -ge 3) { throw }
+            Start-Sleep -Milliseconds 5
+        }
+        finally {
+            if ($null -ne $sr) { $sr.Dispose() }
+            elseif ($null -ne $fs) { $fs.Dispose() }
+        }
+    }
     if ([string]::IsNullOrWhiteSpace($text)) {
         throw "ORCHESTRA_EXTERNAL: Empty JSON file: $Path"
     }
@@ -149,6 +176,13 @@ function Write-JsonAtomic {
 
 function Get-OrchestraLockKey {
     param([hashtable]$Paths, [string]$Name)
+    if ($Name -eq 'registry') {
+        $regDir = [string](Get-OrchestraProperty $Paths 'RegistryDir' '')
+        if ([string]::IsNullOrWhiteSpace($regDir)) {
+            $regDir = [IO.Path]::GetDirectoryName([string]$Paths.Registry)
+        }
+        return [IO.Path]::GetFullPath((Join-Path $regDir '.registry.lock')).ToLowerInvariant()
+    }
     return [IO.Path]::GetFullPath(
         (Join-Path $Paths.Locks ($Name + '.lock'))
     ).ToLowerInvariant()
@@ -188,7 +222,10 @@ function Invoke-WithLock {
             throw 'ORCHESTRA_LOCK_ORDER: Use registry, state, usage, slots order.'
         }
     }
-    [void][IO.Directory]::CreateDirectory($Paths.Locks)
+    $lockParent = [IO.Path]::GetDirectoryName($key)
+    if (-not [string]::IsNullOrWhiteSpace($lockParent)) {
+        [void][IO.Directory]::CreateDirectory($lockParent)
+    }
     $watch = [Diagnostics.Stopwatch]::StartNew()
     $handle = $null
     while ($null -eq $handle) {
@@ -199,10 +236,14 @@ function Invoke-WithLock {
             )
         }
         catch [IO.IOException] {
+            $hr = $_.Exception.HResult
+            if ($hr -notin @(-2147024864, -2147024863)) {
+                throw
+            }
             if ($watch.Elapsed.TotalSeconds -ge $TimeoutSec) {
                 throw "ORCHESTRA_LOCK_TIMEOUT: $Name"
             }
-            Start-Sleep -Milliseconds 100
+            Start-Sleep -Milliseconds (Get-Random -Minimum 8 -Maximum 36)
         }
     }
     $script:OrchestraHeldLocks[$key] = $ranks[$Name]
@@ -240,18 +281,28 @@ function Add-ChangelogEntry {
     Assert-OrchestraLockHeld -Paths $Paths -Name registry
     [void][IO.Directory]::CreateDirectory($Paths.RegistryDir)
     $isNew = -not [IO.File]::Exists($Paths.Changelog)
+    $nl = "`n"
+    $existingText = ''
+    if (-not $isNew) {
+        $existingText = [IO.File]::ReadAllText($Paths.Changelog, $script:OrchestraUtf8)
+        if ($existingText.Contains("`r`n")) {
+            $nl = "`r`n"
+        }
+    }
     $stamp = (Get-OrchestraNow).ToString('o')
     $safeTitle = $Title -replace '[\r\n]+', ' '
     $builder = New-Object Text.StringBuilder
     if ($isNew) {
-        [void]$builder.AppendLine('# Model orchestra changelog')
-        [void]$builder.AppendLine()
+        [void]$builder.Append('# Model orchestra changelog' + $nl + $nl)
     }
-    [void]$builder.AppendLine("## $stamp - $safeTitle")
+    elseif ($existingText.Length -gt 0 -and -not $existingText.EndsWith("`n")) {
+        [void]$builder.Append($nl)
+    }
+    [void]$builder.Append("## $stamp - $safeTitle" + $nl)
     foreach ($line in $Lines) {
-        [void]$builder.AppendLine('- ' + ($line -replace '[\r\n]+', ' '))
+        [void]$builder.Append('- ' + ($line -replace '[\r\n]+', ' ') + $nl)
     }
-    [void]$builder.AppendLine()
+    [void]$builder.Append($nl)
     [IO.File]::AppendAllText(
         $Paths.Changelog, $builder.ToString(), $script:OrchestraUtf8
     )
@@ -470,10 +521,10 @@ function Read-UsageEvents {
     finally { $reader.Dispose() }
 }
 
-function Get-OutcomeStats {
+function New-OutcomeStatsIndex {
     param(
-        [object[]]$Events = @(), [string]$ModelId,
-        [string[]]$Tags = @(), [int]$WindowDays = 30
+        [AllowEmptyCollection()][object[]]$Events = @(),
+        [int]$WindowDays = 30
     )
     $invocations = @{}
     $outcomes = @{}
@@ -493,18 +544,14 @@ function Get-OutcomeStats {
             }
         }
     }
-    $stats = @{
-        n = 0; ok = 0; redo = 0; fail = 0
-        ok_invocations = 0; ok_tags = @(); consecutive_fail = 0
-    }
-    $okTags = @{}
-    $rows = New-Object 'System.Collections.Generic.List[object]'
+    $rawByModel = @{}
     $now = Get-OrchestraNow
     $cutoff = $now.AddDays(-$WindowDays)
     foreach ($id in $invocations.Keys) {
         $invocation = $invocations[$id]
-        if ([string](Get-OrchestraProperty $invocation 'model') -ne $ModelId) { continue }
         if (-not $outcomes.ContainsKey($id)) { continue }
+        $modelKey = [string](Get-OrchestraProperty $invocation 'model')
+        if ([string]::IsNullOrWhiteSpace($modelKey)) { continue }
         try {
             $stamp = ConvertTo-OrchestraUtc (
                 [string](Get-OrchestraProperty $invocation 'ts')
@@ -513,30 +560,86 @@ function Get-OutcomeStats {
         catch { continue }
         if ($stamp -lt $cutoff -or $stamp -gt $now) { continue }
         $tagValues = Get-OrchestraProperty $invocation 'tags' @()
-        $invocationTags = @($tagValues)
-        if (@($Tags).Count -gt 0) {
-            $matches = @($invocationTags | Where-Object { $_ -in $Tags })
-            if ($matches.Count -eq 0) { continue }
-        }
+        $invocationTags = @(
+            foreach ($t in @($tagValues)) {
+                [string]$t
+            }
+        )
         $row = $outcomes[$id]
         $value = [string](Get-OrchestraProperty $row.event 'outcome')
+        if (-not $rawByModel.ContainsKey($modelKey)) {
+            $rawByModel[$modelKey] = New-Object 'System.Collections.Generic.List[object]'
+        }
+        [void]$rawByModel[$modelKey].Add([pscustomobject]@{
+            outcome = $value
+            sequence = [int]$row.sequence
+            ts = $stamp
+            tags = $invocationTags
+        })
+    }
+    $sortedByModel = @{}
+    foreach ($modelKey in $rawByModel.Keys) {
+        $sortedByModel[$modelKey] = @($rawByModel[$modelKey].ToArray() | Sort-Object sequence -Descending)
+    }
+    return @{
+        window_days = $WindowDays
+        by_model = $sortedByModel
+    }
+}
+
+function Get-OutcomeStats {
+    param(
+        [AllowEmptyCollection()][object[]]$Events = @(), [string]$ModelId,
+        [string[]]$Tags = @(), [int]$WindowDays = 30, $Index = $null
+    )
+    if ($null -eq $Index) {
+        $Index = New-OutcomeStatsIndex -Events $Events -WindowDays $WindowDays
+    }
+    else {
+        $indexWindow = [int](Get-OrchestraProperty $Index 'window_days' 0)
+        if ($WindowDays -gt $indexWindow) {
+            throw "ORCHESTRA_ARGS: Requested WindowDays ($WindowDays) exceeds OutcomeStatsIndex window_days ($indexWindow)."
+        }
+    }
+    $stats = @{
+        n = 0; ok = 0; redo = 0; fail = 0
+        ok_invocations = 0; ok_tags = @(); consecutive_fail = 0
+    }
+    if (-not $Index.by_model.ContainsKey($ModelId)) {
+        return $stats
+    }
+    $now = Get-OrchestraNow
+    $cutoff = $now.AddDays(-$WindowDays)
+    $okTags = @{}
+    $streakOpen = $true
+    $filterTags = (@($Tags).Count -gt 0)
+    foreach ($row in @($Index.by_model[$ModelId])) {
+        $rowTs = Get-OrchestraProperty $row 'ts' $null
+        if ($null -ne $rowTs -and ($rowTs -lt $cutoff -or $rowTs -gt $now)) {
+            continue
+        }
+        if ($filterTags) {
+            $matched = $false
+            foreach ($tg in $row.tags) {
+                if ($Tags -contains $tg) { $matched = $true; break }
+            }
+            if (-not $matched) { continue }
+        }
+        $value = [string]$row.outcome
         $stats.n++
         $stats[$value]++
+        if ($streakOpen) {
+            if ($value -eq 'fail') { $stats.consecutive_fail++ }
+            else { $streakOpen = $false }
+        }
         if ($value -eq 'ok') {
             $stats.ok_invocations++
-            foreach ($tag in $invocationTags) {
-                if (-not [string]::IsNullOrWhiteSpace([string]$tag)) {
-                    $okTags[[string]$tag] = $true
+            foreach ($tg in $row.tags) {
+                if (-not [string]::IsNullOrWhiteSpace($tg)) {
+                    $okTags[$tg] = $true
                 }
             }
         }
-        [void]$rows.Add([pscustomobject]@{
-            outcome = $value; sequence = $row.sequence
-        })
-    }
-    foreach ($row in @($rows | Sort-Object sequence -Descending)) {
-        if ($row.outcome -ne 'fail') { break }
-        $stats.consecutive_fail++
     }
     $stats.ok_tags = @($okTags.Keys | Sort-Object)
     return $stats
@@ -595,9 +698,11 @@ function Get-OrchestraSystemProxy {
     }
 
     try {
-        $inet = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction SilentlyContinue
-        if ($null -ne $inet -and [int]$inet.ProxyEnable -eq 1 -and -not [string]::IsNullOrWhiteSpace([string]$inet.ProxyServer)) {
-            $rawProxy = ([string]$inet.ProxyServer).Trim()
+        $regKey = 'HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+        $proxyEnable = [Microsoft.Win32.Registry]::GetValue($regKey, 'ProxyEnable', 0)
+        $proxyServer = [Microsoft.Win32.Registry]::GetValue($regKey, 'ProxyServer', $null)
+        if ($null -ne $proxyEnable -and [int]$proxyEnable -eq 1 -and -not [string]::IsNullOrWhiteSpace([string]$proxyServer)) {
+            $rawProxy = ([string]$proxyServer).Trim()
             if ($rawProxy -match '(?:^|;)https=([^;]+)') {
                 $rawProxy = $Matches[1].Trim()
             }
@@ -861,12 +966,32 @@ function Invoke-OrchestraProcess {
                 $ready = (-not $outputDone -and $outputTask.IsCompleted) -or
                     (-not $errorDone -and $errorTask.IsCompleted)
                 if (-not $ready -and
-                    ($watch.Elapsed.TotalSeconds - $exitSeenAt) -ge 10) {
+                    ($watch.Elapsed.TotalSeconds - $exitSeenAt) -ge 10.0) {
                     $truncated = $true
                     break
                 }
             }
-            if (-not $progress) { Start-Sleep -Milliseconds 10 }
+            if (-not $progress) {
+                $pendingTasks = New-Object 'System.Collections.Generic.List[System.Threading.Tasks.Task]'
+                if (-not $outputDone -and $null -ne $outputTask) {
+                    [void]$pendingTasks.Add([System.Threading.Tasks.Task]$outputTask)
+                }
+                if (-not $errorDone -and $null -ne $errorTask) {
+                    [void]$pendingTasks.Add([System.Threading.Tasks.Task]$errorTask)
+                }
+                if ($null -ne $inputTask) {
+                    [void]$pendingTasks.Add([System.Threading.Tasks.Task]$inputTask)
+                }
+                if ($pendingTasks.Count -gt 0) {
+                    try {
+                        $null = [System.Threading.Tasks.Task]::WaitAny([System.Threading.Tasks.Task[]]$pendingTasks.ToArray(), 25)
+                    }
+                    catch {}
+                }
+                else {
+                    Start-Sleep -Milliseconds 5
+                }
+            }
         }
         $exitCode = 3
         if ($process.HasExited) { $exitCode = $process.ExitCode }
@@ -1103,14 +1228,43 @@ function Wait-CockpitQuiet {
 function Resolve-CodexExe {
     param(
         [hashtable]$Paths,
+        [object]$State = $null,
         [switch]$NoStateCache,
         [switch]$AccountRotation,
         [string]$CodexHome = (Get-OrchestraCodexHome),
         [int]$RotationWaitMs = 10000
     )
     $override = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_CODEX')
+    $hasOverride = -not [string]::IsNullOrWhiteSpace($override)
+    $cacheState = $State
+    if (-not $hasOverride -and -not $NoStateCache) {
+        if ($null -eq $cacheState -and $null -ne $Paths) {
+            $cacheState = Read-State -Paths $Paths
+        }
+        $quickCache = Get-OrchestraProperty $cacheState 'codex_exe_cache'
+        $quickPath = [string](Get-OrchestraProperty $quickCache 'path' '')
+        $quickSource = [string](Get-OrchestraProperty $quickCache 'source' '')
+        if (
+            $quickSource -eq 'discovered' -and
+            -not [string]::IsNullOrWhiteSpace($quickPath) -and
+            [IO.File]::Exists($quickPath)
+        ) {
+            $quickItem = Get-Item -LiteralPath $quickPath
+            $quickVer = [string](Get-OrchestraProperty $quickCache 'version' '')
+            $parsedQuick = [version]'0.0.0'
+            if (
+                [long](Get-OrchestraProperty $quickCache 'length' -1) -eq $quickItem.Length -and
+                [string](Get-OrchestraProperty $quickCache 'last_write_utc' '') -ceq $quickItem.LastWriteTimeUtc.ToString('o') -and
+                [version]::TryParse($quickVer, [ref]$parsedQuick) -and
+                $parsedQuick -ge [version]'0.153.0'
+            ) {
+                return $quickPath
+            }
+        }
+    }
+
     $candidates = @{}
-    if (-not [string]::IsNullOrWhiteSpace($override)) {
+    if ($hasOverride) {
         $full = [IO.Path]::GetFullPath($override)
         if (-not [IO.File]::Exists($full)) {
             throw "ORCHESTRA_EXTERNAL: MODEL_ORCHESTRA_CODEX not found: $full"
@@ -1148,16 +1302,20 @@ function Resolve-CodexExe {
         }
     }
     $cache = $null
-    if (-not $NoStateCache) {
-        $state = Read-State -Paths $Paths
-        $cache = Get-OrchestraProperty $state 'codex_exe_cache'
+    if (-not $hasOverride -and -not $NoStateCache) {
+        if ($null -eq $cacheState -and $null -ne $Paths) {
+            $cacheState = Read-State -Paths $Paths
+        }
+        $cache = Get-OrchestraProperty $cacheState 'codex_exe_cache'
     }
     $valid = New-Object 'System.Collections.Generic.List[object]'
     foreach ($file in $candidates.Values) {
         $item = Get-Item -LiteralPath $file
         $version = $null
         $cachedPath = [string](Get-OrchestraProperty $cache 'path')
-        if ($cachedPath -eq $file -and
+        $cachedSource = [string](Get-OrchestraProperty $cache 'source' '')
+        if ($cachedSource -eq 'discovered' -and
+            $cachedPath -eq $file -and
             [long](Get-OrchestraProperty $cache 'length' -1) -eq $item.Length -and
             [string](Get-OrchestraProperty $cache 'last_write_utc') -eq
                 $item.LastWriteTimeUtc.ToString('o')) {
@@ -1200,12 +1358,13 @@ function Resolve-CodexExe {
         throw 'ORCHESTRA_EXTERNAL: No usable Codex >= 0.153.0 found.'
     }
     $winner = $ordered[0]
-    if (-not $NoStateCache) {
+    if (-not $hasOverride -and -not $NoStateCache) {
         Invoke-WithLock -Paths $Paths -Name state -ScriptBlock {
             $fresh = Read-State -Paths $Paths
             Set-OrchestraProperty $fresh 'codex_exe_cache' ([pscustomobject]@{
                 path = $winner.path; version = $winner.version.ToString()
                 length = $winner.length; last_write_utc = $winner.last_write_utc
+                source = 'discovered'
                 checked_utc = (Get-OrchestraNow).ToString('o')
             })
             Save-State -Paths $Paths -State $fresh
@@ -1218,6 +1377,7 @@ function Get-CodexSupportedFeatures {
     param(
         [Parameter(Mandatory = $true)][string]$Executable,
         [hashtable]$Paths = $null,
+        [object]$State = $null,
         [switch]$NoStateCache
     )
     if (
@@ -1231,9 +1391,14 @@ function Get-CodexSupportedFeatures {
     $fullPath = $item.FullName
     $len = [long]$item.Length
     $mtime = $item.LastWriteTimeUtc.ToString('o')
-    if (-not $NoStateCache -and $null -ne $Paths) {
+    $memKey = ($fullPath + '|' + $len + '|' + $mtime).ToLowerInvariant()
+    if ($script:CodexFeaturesMemCache.ContainsKey($memKey)) {
+        return $script:CodexFeaturesMemCache[$memKey]
+    }
+
+    if ($null -ne $State -or $null -ne $Paths) {
         try {
-            $st = Read-State -Paths $Paths
+            $st = if ($null -ne $State) { $State } else { Read-State -Paths $Paths }
             $fc = Get-OrchestraProperty $st 'codex_features_cache'
             if (
                 $null -ne $fc -and
@@ -1248,6 +1413,7 @@ function Get-CodexSupportedFeatures {
                         $fs = ([string]$f).Trim()
                         if ($fs.Length -gt 0) { $cachedSet[$fs] = $true }
                     }
+                    $script:CodexFeaturesMemCache[$memKey] = $cachedSet
                     return $cachedSet
                 }
             }
@@ -1259,7 +1425,7 @@ function Get-CodexSupportedFeatures {
         $probe = Invoke-OrchestraProcess -FilePath $fullPath `
             -Arguments @('features', 'list') -TimeoutSec 5 -CaptureStdout
         if ($probe.timeout -or $probe.truncated -or $probe.exit_code -ne 0) {
-            return $null
+            return @{}
         }
         $list = New-Object 'System.Collections.Generic.List[string]'
         $map = @{}
@@ -1273,7 +1439,8 @@ function Get-CodexSupportedFeatures {
                 }
             }
         }
-        if ($list.Count -eq 0) { return $null }
+        if ($list.Count -eq 0) { return @{} }
+        $script:CodexFeaturesMemCache[$memKey] = $map
         if (-not $NoStateCache -and $null -ne $Paths) {
             try {
                 Invoke-WithLock -Paths $Paths -Name state -ScriptBlock {
@@ -1293,7 +1460,7 @@ function Get-CodexSupportedFeatures {
         return $map
     }
     catch {
-        return $null
+        return @{}
     }
 }
 
@@ -1329,10 +1496,19 @@ function Get-CodexStealthArguments {
         'multi_agent', 'shell_snapshot', 'skill_search',
         'skill_mcp_dependency_install', 'tool_suggest',
         'tool_call_mcp_elicitation', 'deferred_tool_world_state',
-        'image_generation', 'guardian_approval'
+        'image_generation', 'guardian_approval',
+        'hooks', 'sleep_tool', 'plugin_sharing',
+        'browser_annotation_api', 'browser_use_full_cdp_access',
+        'goals', 'bedrock_setup_wizard',
+        'mcp_oauth_refresh_coordination', 'workspace_dependencies',
+        'view_image'
     )
+    $keepViewImage = (@($Tags | Where-Object { $_ -in @('image_gen', 'frontend', 'ui', 'landing_page', 'office', 'ppt') }).Count -gt 0)
     foreach ($feat in $disableCandidates) {
         if ($feat -eq 'image_generation' -and (@($Tags) -contains 'image_gen')) {
+            continue
+        }
+        if ($feat -eq 'view_image' -and $keepViewImage) {
             continue
         }
         if ($null -eq $SupportedFeatures -or $SupportedFeatures.ContainsKey($feat)) {
@@ -2039,11 +2215,27 @@ function Clear-OrchestraCodexRotationCooldown {
 }
 
 function Test-OrchestraCodexRotationCooldown {
-    param([Parameter(Mandatory = $true)][hashtable]$Paths)
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Paths,
+        [switch]$ReadOnly
+    )
     $slotsDir = [string](Get-OrchestraProperty $Paths 'Slots' '')
     if ([string]::IsNullOrWhiteSpace($slotsDir)) { return $false }
     $cooldownPath = Join-Path $slotsDir '_codex_rotation_cooldown.meta'
     if (-not [IO.File]::Exists($cooldownPath)) { return $false }
+    if ($ReadOnly) {
+        try {
+            $doc = Read-JsonFile -Path $cooldownPath
+            if ($null -eq $doc) { return $false }
+            $untilText = [string](Get-OrchestraProperty $doc 'until_utc' '')
+            if ([string]::IsNullOrWhiteSpace($untilText)) { return $false }
+            $untilDt = ConvertTo-OrchestraUtc $untilText
+            return ($untilDt -gt (Get-OrchestraNow))
+        }
+        catch {
+            return $false
+        }
+    }
     $checkWork = {
         if (-not [IO.File]::Exists($cooldownPath)) { return $false }
         $expiredOrCorrupt = $false
@@ -2104,6 +2296,7 @@ function Get-ActivePoolSlotStatus {
             agy_anthropic = (New-Object 'System.Collections.Generic.List[int]')
             agy_google = (New-Object 'System.Collections.Generic.List[int]')
         }
+        $activeInvocationIds = New-Object 'System.Collections.Generic.List[string]'
         $reclaimed = 0
         $staleDetected = 0
         $slotsDir = [string](Get-OrchestraProperty $Paths 'Slots' '')
@@ -2164,6 +2357,10 @@ function Get-ActivePoolSlotStatus {
                 }
                 if ($counts.ContainsKey($leasePool)) {
                     $counts[$leasePool]++
+                    $leaseInvId = [string](Get-OrchestraProperty $lease 'invocation_id' '')
+                    if (-not [string]::IsNullOrWhiteSpace($leaseInvId)) {
+                        [void]$activeInvocationIds.Add($leaseInvId)
+                    }
                     $leaseModel = [string](Get-OrchestraProperty $lease 'model' '')
                     if (-not [string]::IsNullOrWhiteSpace($leaseModel)) {
                         [void]$modelsMap[$leasePool].Add($leaseModel)
@@ -2176,7 +2373,7 @@ function Get-ActivePoolSlotStatus {
                 }
             }
         }
-        $codexCooldownActive = Test-OrchestraCodexRotationCooldown -Paths $Paths
+        $codexCooldownActive = Test-OrchestraCodexRotationCooldown -Paths $Paths -ReadOnly:(-not $CleanupStale)
         $totalActive = 0
         $poolsOut = [ordered]@{}
         foreach ($p in $poolNames) {
@@ -2200,6 +2397,7 @@ function Get-ActivePoolSlotStatus {
             total_active = [int]$totalActive
             underutilized = ($totalActive -lt 2)
             pools = $poolsOut
+            active_invocation_ids = @($activeInvocationIds.ToArray())
             reclaimed_stale = [int]$reclaimed
             stale_detected = [int]$staleDetected
         }

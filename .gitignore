@@ -2,6 +2,9 @@
 .orchestra-prompt-*.md
 *.tmp
 *.bak
+*.log
+*.lock
+.registry.lock
 
 # Local probe evaluation outputs
 evals/results/

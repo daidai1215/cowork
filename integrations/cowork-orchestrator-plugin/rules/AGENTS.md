@@ -2,7 +2,7 @@
 
 1. **Fast-Plan & Zero-Relay Execution**
 - Plan Mode (`<=1` turn): `<5` unread files/in-context = `0` external/swarm calls (plan/`exit_plan_mode`). `>=5` unread = max `1` sync call: omit `-OutFile`, read `.response`, `-AutoRecordOk` (no `schedule 35s`/`.events.jsonl`/`record-outcome.ps1`).
-- Execution: Open `/swarm`+`/cowork` post-`exit_plan_mode`. Workers run local slices (`gemini-4-hydrogen-xhigh`; monitor/scan `high`/`medium`; never `Orchestrator`). Host calls `gpt-6.2-astra` & `claude-opus-5-5` directly in parallel at `T=0` (no `gatekeeper`).
+- Execution: Open `/swarm`+`/cowork` post-`exit_plan_mode`. Workers run local slices (`gemini-4-hydrogen-xhigh`; monitor/scan `high`/`medium`; never `Orchestrator`). Host calls ONLY selected external roles whose inputs are ready at `T=0` (0 Opus on backend-only; Opus Aesthetic Gate waits for UI screenshots/tokens; no `gatekeeper`).
 
 2. **Host Routing (`-HostModel orchestrator|carbon|hydrogen`)**
 - `orchestrator`: ~80% Carbon->4H Extra; Carbon keeps `architecture`, `paper/essay/copywriting`, `math/algorithm` review.

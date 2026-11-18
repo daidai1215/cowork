@@ -174,6 +174,7 @@ try {
     # 6. Expired state hygiene (exhausted / scan_lease / research_leases)
     $now = Get-OrchestraNow
     $expiredCount = 0
+    $stSnap = $null
     if ($Repair) {
         $expiredCount = Invoke-WithLock -Paths $paths -Name state -ScriptBlock {
             if (-not [IO.File]::Exists($paths.State)) { return 0 }
@@ -272,14 +273,26 @@ try {
     Add-DoctorCheck $checks 'slot_hygiene' $slotHygienePassed ("active=$($slotStatus.total_active);reclaimed=$($slotStatus.reclaimed_stale);stale_detected=$($slotStatus.stale_detected)")
 
     # 7. Codex non-interactive shell evolution probe
-    $stateAfter = Read-State -Paths $paths
+    $stateAfter = if (-not $Repair -and $null -ne $stSnap) { $stSnap } else { Read-State -Paths $paths }
     $exeCache = Get-OrchestraProperty $stateAfter 'codex_exe_cache'
     $codexVersion = [string](Get-OrchestraProperty $exeCache 'version' '')
     $shellProbe = Get-OrchestraProperty $stateAfter 'codex_shell_probe'
     $probedVersion = [string](Get-OrchestraProperty $shellProbe 'version' '')
+    $codexOverrideSet = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_CODEX'))
+    if ($codexOk -and ($codexOverrideSet -or [string]::IsNullOrWhiteSpace($codexVersion))) {
+        try {
+            $verProbe = Invoke-OrchestraProcess -FilePath $codexPath -Arguments @('--version') -TimeoutSec 3 -CaptureStdout
+            if (-not $verProbe.timeout -and -not $verProbe.truncated -and $verProbe.exit_code -eq 0) {
+                $verMatch = [regex]::Match(($verProbe.stdout -join "`n"), '(?<!\d)(\d+\.\d+\.\d+)(?:[-+][^\s]+)?')
+                if ($verMatch.Success) {
+                    $codexVersion = $verMatch.Groups[1].Value
+                }
+            }
+        }
+        catch {}
+    }
     $codexVersionChanged = (-not [string]::IsNullOrWhiteSpace($codexVersion)) -and ($probedVersion -ne $codexVersion)
 
-    $codexOverrideSet = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_CODEX'))
     if ($ProbeCodexShell -and $codexOk -and (-not $NoNetwork -or $codexOverrideSet)) {
         $probeProxyEnv = @{}
         $sysProxy = Get-OrchestraSystemProxy

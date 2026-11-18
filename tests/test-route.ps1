@@ -1050,6 +1050,177 @@ try {
             $uScanEscFast.Result.primary -eq 'syn-fast' -and
             $uScanEscFast.Result.primary_effort -eq 'xhigh'
         ) 'ultra_fast_tags routes pure scan to medium, mixed bulk,scan to high, and escalated scan to Carbon/xhigh'
+
+        # 13. Rev 14 optimizations & invariants: RegistryObject/SkipTelemetry, PreferIdle guards, HardPreferredIds, lease dedup, parallel_lanes
+        Set-RTestExhaustion
+        Save-RTestFixture $hostRegistry
+
+        # 13a. In-memory RegistryObject + SkipTelemetry skips usage.jsonl penalty & disk registry read
+        $routeScriptPath = Join-Path $root 'scripts\route.ps1'
+        for ($ui = 1; $ui -le 4; $ui++) {
+            $uId = "r14-fail-$ui"
+            Add-UsageEvent -Paths $script:routePaths -Event @{
+                type = 'invocation'; ad_hoc = $false; invocation_id = $uId
+                ts = '2026-11-08T10:00:00Z'; model = 'syn-rigor'; channel = 'codex'
+                tags = @('bugfix'); access = 'read'; exit = 0
+            }
+            Add-UsageEvent -Paths $script:routePaths -Event @{
+                type = 'outcome'; invocation_id = $uId
+                ts = '2026-11-08T10:01:00Z'; outcome = 'fail'; note = 'test'
+            }
+        }
+        try {
+            $inProcRoute = {
+                param([switch]$WithSkip)
+                $savedConOut = [Console]::Out
+                $sw = New-Object IO.StringWriter
+                [Console]::SetOut($sw)
+                try {
+                    if ($WithSkip) {
+                        & $routeScriptPath -Tags 'bugfix' -Mode 'peak' -StateDir $script:routePaths.StateDir -RegistryObject $hostRegistry -SkipTelemetry
+                    }
+                    else {
+                        & $routeScriptPath -Tags 'bugfix' -Mode 'peak' -RegistryPath $script:routePaths.Registry -StateDir $script:routePaths.StateDir
+                    }
+                }
+                finally {
+                    [Console]::SetOut($savedConOut)
+                }
+                $txt = $sw.ToString().Trim()
+                $sw.Dispose()
+                $linesOut = @($txt -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                return ($linesOut[$linesOut.Count - 1] | ConvertFrom-Json)
+            }
+            $rWithTelemetry = & $inProcRoute
+            $rSkipTelemetry = & $inProcRoute -WithSkip
+            Assert-RTest (
+                [double]$rWithTelemetry.scores.'syn-rigor'.penalties.redo -gt 0 -and
+                [double]$rSkipTelemetry.scores.'syn-rigor'.penalties.redo -eq 0 -and
+                $rSkipTelemetry.primary -eq 'syn-rigor'
+            ) 'RegistryObject + SkipTelemetry bypasses usage redo penalty while full route applies it'
+        }
+        finally {
+            if ([IO.File]::Exists($script:routePaths.Usage)) { [IO.File]::Delete($script:routePaths.Usage) }
+        }
+
+        # 13b. Reviewer & co_drafter saturation shifts require -PreferIdle
+        $coReg = Copy-RTestFixture $hostRegistry
+        $coAesthetic = Get-RTestModel $coReg 'syn-aesthetic'
+        Set-OrchestraProperty $coAesthetic 'primary_disabled' $false
+        Set-RTestScore $coAesthetic 'agentic_coding' 8.0
+        Save-RTestFixture $coReg
+        $pSatGoogleNoPref = Invoke-RTest 'bugfix' -ModeName 'peak' -BusyAgents 'agy_google,agy_google,agy_google,agy_google,agy_google,agy_google,agy_google'
+        $pSatGooglePref = Invoke-RTest 'bugfix' -ModeName 'peak' -BusyAgents 'agy_google,agy_google,agy_google,agy_google,agy_google,agy_google,agy_google' -PreferIdle
+        Assert-RTest (
+            $pSatGoogleNoPref.Exit -eq 0 -and
+            $pSatGoogleNoPref.Result.reviewer -eq 'syn-prose' -and
+            $pSatGoogleNoPref.Result.orchestration.co_drafter -eq 'syn-prose' -and
+            $pSatGooglePref.Exit -eq 0 -and
+            $pSatGooglePref.Result.reviewer -eq 'syn-aesthetic' -and
+            $pSatGooglePref.Result.orchestration.co_drafter -eq 'syn-aesthetic'
+        ) 'reviewer and co_drafter stay on saturated agy_google without -PreferIdle and shift with -PreferIdle'
+
+        # 13c. HardPreferredIds prevents 1.5-pt vendor-diversity override on explicit hard_rules reviewer
+        $hardRevReg = Copy-RTestFixture $synBase
+        $sameOpenAiDraft = Copy-RTestFixture (Get-RTestModel $hardRevReg 'syn-rigor')
+        Set-OrchestraProperty $sameOpenAiDraft 'id' 'syn-rigor-draft'
+        Set-OrchestraProperty $sameOpenAiDraft 'display_name' 'Synthetic Rigor Draft'
+        Set-RTestScore $sameOpenAiDraft 'backend' 10
+        Set-RTestScore $sameOpenAiDraft 'code_rigor' 10
+        Set-RTestScore $sameOpenAiDraft 'agentic_coding' 10
+        Set-OrchestraProperty $sameOpenAiDraft 'speed_rank' 2
+        Set-OrchestraProperty $hardRevReg 'models' (@($hardRevReg.models) + @($sameOpenAiDraft))
+        Set-OrchestraProperty $hardRevReg 'hard_rules' (@($hardRevReg.hard_rules) + @(
+            [pscustomobject]@{
+                id = 'explicit-rigor-rev'
+                when_tags_any = @('backend')
+                reviewer = 'syn-rigor'
+                locked = $false
+            }
+        ))
+        Save-RTestFixture $hardRevReg
+        $pHardRev = Invoke-RTest 'backend,concurrency' -ModeName 'peak'
+        Assert-RTest (
+            $pHardRev.Exit -eq 0 -and
+            $pHardRev.Result.primary -eq 'syn-rigor-draft' -and
+            $pHardRev.Result.reviewer -eq 'syn-rigor'
+        ) 'explicit hard_rules reviewer overrides 1.5-pt vendor-diversity heuristic when != primary'
+
+        # 13d. Get-RPoolLoad deduplicates -BusyAgents <invocation_id> / inv:<invocation_id> against active slot leases
+        Save-RTestFixture $hostRegistry
+        $dedupLease = $null
+        try {
+            $dedupLease = Acquire-OrchestraPoolSlot -Paths $script:routePaths -Pool 'codex_openai' -Limit 4 -InvocationId 'route-dedup-1' -ModelId 'syn-rigor' -Channel 'codex' -NoWait
+            $pDedup = Invoke-RTest 'bugfix' -ModeName 'peak' -BusyAgents 'inv:route-dedup-1,route-dedup-1,syn-rigor'
+            Assert-RTest (
+                $pDedup.Exit -eq 0 -and
+                $pDedup.Result.orchestration.pool_load.pools.codex_openai.active -eq 2
+            ) 'BusyAgents matching active lease invocation_id is not double-counted while plain model counts'
+        }
+        finally {
+            if ($null -ne $dedupLease) {
+                Release-OrchestraPoolSlot -Paths $script:routePaths -LeasePath $dedupLease.lease_path -InvocationId 'route-dedup-1'
+            }
+        }
+
+        # 13e. parallel_lanes omits saturated codex_openai contract lane & excludes Carbon under hydrogen_max
+        $pSatCodexLanes = Invoke-RTest 'frontend,landing_page' -ModeName 'peak' -BusyAgents 'codex_openai,codex_openai,codex_openai,codex_openai' -PreferIdle
+        Set-RTestExhaustion @('syn-rigor')
+        $pHydMaxLanes = Invoke-RTest 'bugfix' -ModeName 'hydrogen_max'
+        $satCodexLaneHit = @($pSatCodexLanes.Result.orchestration.parallel_lanes | Where-Object { $_.lane -eq 'parallel_codex_contract' })
+        $hydMaxGoogleLaneHit = @($pHydMaxLanes.Result.orchestration.parallel_lanes | Where-Object { $_.lane -eq 'parallel_fast_google' })
+        Assert-RTest (
+            $pSatCodexLanes.Exit -eq 0 -and
+            $pSatCodexLanes.Result.primary -eq 'syn-prose' -and
+            $satCodexLaneHit.Count -eq 0 -and
+            $pHydMaxLanes.Exit -eq 0 -and
+            $pHydMaxLanes.Result.primary -eq 'syn-fast' -and
+            $hydMaxGoogleLaneHit.Count -eq 0
+        ) 'parallel_lanes skips saturated parallel_codex_contract and excludes Carbon in hydrogen_max parallel_fast_google'
+
+        # 13f. parallel_fast_google accounts for primary in agy_google & backend scale_out_hint omits Opus
+        Save-RTestFixture $hostRegistry
+        Set-RTestExhaustion
+        $g6Busy = 'agy_google,agy_google,agy_google,agy_google,agy_google,agy_google'
+        $g5Busy = 'agy_google,agy_google,agy_google,agy_google,agy_google'
+        $pG6Codex = Invoke-RTest 'bugfix' -ModeName 'peak' -BusyAgents $g6Busy
+        Set-RTestExhaustion @('syn-rigor')
+        $pG6Google = Invoke-RTest 'bugfix' -ModeName 'peak' -BusyAgents $g6Busy
+        $pG5Google = Invoke-RTest 'bugfix' -ModeName 'peak' -BusyAgents $g5Busy
+        $hasG6CodexLane = @($pG6Codex.Result.orchestration.parallel_lanes | Where-Object { $_.lane -eq 'parallel_fast_google' }).Count -eq 1
+        $hasG6GoogleLane = @($pG6Google.Result.orchestration.parallel_lanes | Where-Object { $_.lane -eq 'parallel_fast_google' }).Count -eq 0
+        $hasG5GoogleLane = @($pG5Google.Result.orchestration.parallel_lanes | Where-Object { $_.lane -eq 'parallel_fast_google' }).Count -eq 1
+        Assert-RTest (
+            $pG6Codex.Exit -eq 0 -and
+            $pG6Codex.Result.primary -eq 'syn-rigor' -and
+            $hasG6CodexLane -and
+            $pG6Google.Exit -eq 0 -and
+            $pG6Google.Result.primary -eq 'syn-prose' -and
+            $hasG6GoogleLane -and
+            $pG5Google.Exit -eq 0 -and
+            $pG5Google.Result.primary -eq 'syn-prose' -and
+            $hasG5GoogleLane
+        ) 'parallel_fast_google checks remaining agy_google capacity when primary occupies agy_google'
+
+        Set-RTestExhaustion
+        $liveRouteArgsBase = @(
+            '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+            '-File', (Join-Path $root 'scripts\route.ps1'),
+            '-RegistryPath', $sourcePaths.Registry,
+            '-StateDir', $script:routePaths.StateDir
+        )
+        $liveBeExec = Invoke-OrchestraProcess -FilePath $engine -Arguments ($liveRouteArgsBase + @('-Tags', 'backend,concurrency')) -WorkDir $temp -TimeoutSec 60 -CaptureStdout
+        $liveFeExec = Invoke-OrchestraProcess -FilePath $engine -Arguments ($liveRouteArgsBase + @('-Tags', 'frontend,landing_page')) -WorkDir $temp -TimeoutSec 60 -CaptureStdout
+        $liveBeJson = ([string](@($liveBeExec.stdout | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })[0])) | ConvertFrom-Json
+        $liveFeJson = ([string](@($liveFeExec.stdout | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })[0])) | ConvertFrom-Json
+        Assert-RTest (
+            $liveBeExec.exit_code -eq 0 -and
+            ($liveBeJson.orchestration.scale_out_hint -like 'underutilized_capacity:*') -and
+            ($liveBeJson.orchestration.scale_out_hint -notmatch 'Opus|claude-opus-5-5') -and
+            $liveFeExec.exit_code -eq 0 -and
+            ($liveFeJson.orchestration.scale_out_hint -like 'underutilized_capacity:*') -and
+            ($liveFeJson.orchestration.scale_out_hint -match 'Opus')
+        ) 'backend scale_out_hint omits Opus when unselected while frontend includes Opus when selected'
     }
     finally {
         Save-RTestFixture $fixture
