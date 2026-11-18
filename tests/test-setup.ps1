@@ -17,7 +17,7 @@ $tempParent = $null
 $envNames = @(
     'MODEL_ORCHESTRA_AGY_WRAPPER', 'MODEL_ORCHESTRA_CODEX',
     'MODEL_ORCHESTRA_CODEX_HOME', 'MODEL_ORCHESTRA_NOW',
-    'MODEL_ORCHESTRA_PROXY'
+    'MODEL_ORCHESTRA_PROXY', 'COWORK_SKIP_GLOBAL_PLUGIN'
 )
 $savedEnv = @{}
 foreach ($n in $envNames) {
@@ -318,6 +318,66 @@ exit 0
         $profilesText.Contains('claude-sonnet-5-5') -and
         -not $profilesText.Contains('gpt-6.2-astra')
     ) 'sync-docs renders custom roster into model-profiles.md with zero drift'
+
+    # Verify global_plugin_synced is skipped for isolated paths by default, synced when -GlobalPluginDestination is targeted, and blocked by -SkipGlobalPlugin / COWORK_SKIP_GLOBAL_PLUGIN
+    $pluginSrcDir = Join-Path $caseRepo 'integrations\cowork-orchestrator-plugin'
+    [void][IO.Directory]::CreateDirectory((Join-Path $pluginSrcDir 'rules'))
+    $mockPluginJson = '{"name":"cowork-orchestrator","version":"1.0.0"}'
+    $mockAgentsMd = "# Mock Orchestrator Rules`n"
+    [IO.File]::WriteAllText((Join-Path $pluginSrcDir 'plugin.json'), $mockPluginJson, $script:OrchestraUtf8)
+    [IO.File]::WriteAllText((Join-Path $pluginSrcDir 'rules\AGENTS.md'), $mockAgentsMd, $script:OrchestraUtf8)
+    $fakeGlobalDest = Join-Path $tempRoot 'plugins\cowork-orchestrator'
+
+    Assert-STest (-not [bool]$fullSetup.Json.global_plugin_synced) 'isolated setup with non-default RegistryPath/StateDir skips global plugin sync by default'
+
+    $pluginSyncRun = Invoke-SScript 'scripts\setup.ps1' @(
+        '-Models', 'neon,sonnet5.5,sol',
+        '-ReviewOnlyModels', 'sonnet5.5',
+        '-Evaluate', 'none',
+        '-SkipJunction', '-NoNetwork',
+        '-GlobalPluginDestination', $fakeGlobalDest,
+        '-AgyListFile', $agyFixture, '-CodexCatalogFile', $codexFixture,
+        '-RegistryPath', $caseReg, '-StateDir', $caseState
+    ) 120
+    $copiedPlugin = Join-Path $fakeGlobalDest 'plugin.json'
+    $copiedRules = Join-Path $fakeGlobalDest 'rules\AGENTS.md'
+    Assert-STest (
+        $pluginSyncRun.Exit -eq 0 -and
+        [bool]$pluginSyncRun.Json.global_plugin_synced -eq $true -and
+        [IO.File]::Exists($copiedPlugin) -and
+        [IO.File]::Exists($copiedRules) -and
+        ([IO.File]::ReadAllText($copiedPlugin, $script:OrchestraUtf8) -ceq $mockPluginJson) -and
+        ([IO.File]::ReadAllText($copiedRules, $script:OrchestraUtf8) -ceq $mockAgentsMd)
+    ) 'setup syncs cowork-orchestrator plugin.json and rules\AGENTS.md atomically to GlobalPluginDestination'
+
+    $fakeSkippedDest = Join-Path $tempRoot 'plugins\skipped-dest'
+    $pluginSkipFlagRun = Invoke-SScript 'scripts\setup.ps1' @(
+        '-Models', 'neon,sonnet5.5,sol',
+        '-ReviewOnlyModels', 'sonnet5.5',
+        '-Evaluate', 'none',
+        '-SkipJunction', '-SkipGlobalPlugin', '-NoNetwork',
+        '-GlobalPluginDestination', $fakeSkippedDest,
+        '-AgyListFile', $agyFixture, '-CodexCatalogFile', $codexFixture,
+        '-RegistryPath', $caseReg, '-StateDir', $caseState
+    ) 120
+    $env:COWORK_SKIP_GLOBAL_PLUGIN = '1'
+    $pluginSkipEnvRun = Invoke-SScript 'scripts\setup.ps1' @(
+        '-Models', 'neon,sonnet5.5,sol',
+        '-ReviewOnlyModels', 'sonnet5.5',
+        '-Evaluate', 'none',
+        '-SkipJunction', '-NoNetwork',
+        '-GlobalPluginDestination', $fakeSkippedDest,
+        '-AgyListFile', $agyFixture, '-CodexCatalogFile', $codexFixture,
+        '-RegistryPath', $caseReg, '-StateDir', $caseState
+    ) 120
+    $env:COWORK_SKIP_GLOBAL_PLUGIN = $savedEnv['COWORK_SKIP_GLOBAL_PLUGIN']
+    Assert-STest (
+        $pluginSkipFlagRun.Exit -eq 0 -and
+        -not [bool]$pluginSkipFlagRun.Json.global_plugin_synced -and
+        $pluginSkipEnvRun.Exit -eq 0 -and
+        -not [bool]$pluginSkipEnvRun.Json.global_plugin_synced -and
+        -not [IO.Directory]::Exists($fakeSkippedDest)
+    ) '-SkipGlobalPlugin and COWORK_SKIP_GLOBAL_PLUGIN=1 prevent syncing global plugin'
 }
 catch {
     [void]$script:setupFailures.Add('Unhandled setup test error: ' + $_.Exception.Message)

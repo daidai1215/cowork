@@ -33,6 +33,7 @@ function Invoke-RTest {
     param(
         [string]$TagText,
         [string]$ModeName = 'balanced',
+        [string]$HostModel = '',
         [switch]$Escalate,
         [string]$Excluded = ''
     )
@@ -41,8 +42,10 @@ function Invoke-RTest {
         '-File', (Join-Path $root 'scripts\route.ps1'),
         '-RegistryPath', $script:routePaths.Registry,
         '-StateDir', $script:routePaths.StateDir,
-        '-Tags', $TagText, '-Mode', $ModeName
+        '-Tags', $TagText
     )
+    if (-not [string]::IsNullOrWhiteSpace($ModeName)) { $arguments += @('-Mode', $ModeName) }
+    if (-not [string]::IsNullOrWhiteSpace($HostModel)) { $arguments += @('-HostModel', $HostModel) }
     if ($Escalate) { $arguments += '-AllowEscalation' }
     if ($Excluded.Length -gt 0) { $arguments += @('-Exclude', $Excluded) }
     $execution = Invoke-OrchestraProcess -FilePath $engine `
@@ -720,6 +723,164 @@ try {
             $fastMath.Result.primary_effort -eq 'xhigh' -and
             $fastMath.Result.reviewer -eq 'syn-prose'
         ) 'fast_4h keeps rigor primary while offloading routine bugfix review to 4H and math review to Carbon'
+
+        # 10. Host-aware three-tier routing (-HostModel, orchestrator_fast, carbon_peak, hydrogen_max, mechanical high, final_reviewer)
+        Set-RTestExhaustion
+        $hostRegistry = Copy-RTestFixture $fastRegistry
+        $hostModes = Get-OrchestraProperty $hostRegistry 'modes'
+        Set-OrchestraProperty $hostModes 'orchestrator_fast' ([pscustomobject]@{ lambda_q = 0.0; lambda_s = 0.2 })
+        Set-OrchestraProperty $hostModes 'carbon_peak' ([pscustomobject]@{ lambda_q = 0.0; lambda_s = 0.0 })
+        Set-OrchestraProperty $hostModes 'hydrogen_max' ([pscustomobject]@{ lambda_q = 0.0; lambda_s = 0.25 })
+        $hostPolicy = Get-OrchestraProperty $hostRegistry 'policy'
+        Set-OrchestraProperty $hostPolicy 'host_mode_map' ([pscustomobject]@{
+            orchestrator = 'orchestrator_fast'
+            carbon = 'carbon_peak'
+            hydrogen = 'hydrogen_max'
+        })
+        Set-OrchestraProperty $hostPolicy 'mechanical_fast_tags' @('bulk', 'boilerplate', 'scan', 'test_gen')
+        Set-OrchestraProperty $hostPolicy 'carbon_peak_offload_tags' @('bulk', 'boilerplate', 'scan', 'test_gen')
+        Set-OrchestraProperty $hostPolicy 'hydrogen_max_policy' ([pscustomobject]@{
+            from_model = 'syn-prose'
+            to_model = 'syn-fast'
+            final_review_triggers = @('paper', 'essay', 'copywriting', 'architecture')
+        })
+        Set-OrchestraProperty $hostPolicy.fast_workhorse_map 'retain_primary_tags' @('paper', 'essay', 'copywriting', 'architecture')
+        Set-OrchestraProperty $hostPolicy.fast_workhorse_map 'retain_reviewer_tags' @('math', 'algorithm', 'architecture')
+        $synFastHostRef = Get-RTestModel $hostRegistry 'syn-fast'
+        Set-OrchestraProperty $synFastHostRef 'tier' 'fast'
+        $synRigorHostRef = Get-RTestModel $hostRegistry 'syn-rigor'
+        Set-RTestScore $synRigorHostRef 'long_context' 9.0
+        Save-RTestFixture $hostRegistry
+
+        $hOrchFront = Invoke-RTest 'frontend,landing_page' -ModeName '' -HostModel 'Orchestrator (Carbon)'
+        $hOrchArch = Invoke-RTest 'architecture' -ModeName '' -HostModel 'orchestrator'
+        $hOrchPaper = Invoke-RTest 'prose,paper' -ModeName 'orchestrator_fast'
+        $hOrchEsc = Invoke-RTest 'research,long_context' -ModeName 'orchestrator_fast' -Escalate
+        Assert-RTest (
+            $hOrchFront.Exit -eq 0 -and
+            $hOrchFront.Result.mode -eq 'orchestrator_fast' -and
+            $hOrchFront.Result.orchestration.host_mode -eq 'orchestrator_fast' -and
+            $hOrchFront.Result.primary -eq 'syn-fast' -and
+            $hOrchFront.Result.primary_effort -eq 'xhigh' -and
+            $hOrchFront.Result.reviewer -eq 'syn-aesthetic' -and
+            $null -eq $hOrchFront.Result.polisher -and
+            $null -eq $hOrchFront.Result.orchestration.final_reviewer -and
+            @($hOrchFront.Result.orchestration.final_review_triggers).Count -eq 0
+        ) 'HostModel orchestrator resolves orchestrator_fast and offloads routine tasks to 4H Extra'
+        Assert-RTest (
+            $hOrchArch.Exit -eq 0 -and
+            $hOrchArch.Result.primary -eq 'syn-rigor' -and
+            $hOrchArch.Result.reviewer -eq 'syn-prose' -and
+            $hOrchPaper.Exit -eq 0 -and
+            $hOrchPaper.Result.primary -eq 'syn-prose' -and
+            $hOrchEsc.Exit -eq 0 -and
+            $hOrchEsc.Result.primary -eq 'syn-prose'
+        ) 'orchestrator_fast retains Carbon for architecture, paper, and AllowEscalation'
+
+        $hCarbNormal = Invoke-RTest 'frontend,landing_page' -ModeName '' -HostModel 'Gemini 4 Carbon'
+        $hCarbMath = Invoke-RTest 'math' -ModeName 'carbon_peak'
+        $hCarbBulk = Invoke-RTest 'bulk,scan' -ModeName 'carbon_peak'
+        $hCarbBulkEsc = Invoke-RTest 'bulk,scan' -ModeName 'carbon_peak' -Escalate
+        $hCarbCoDraft = Invoke-RTest 'bugfix,bulk' -ModeName 'carbon_peak'
+        Assert-RTest (
+            $hCarbNormal.Exit -eq 0 -and
+            $hCarbNormal.Result.mode -eq 'carbon_peak' -and
+            $hCarbNormal.Result.orchestration.host_mode -eq 'carbon_peak' -and
+            $hCarbNormal.Result.primary -eq 'syn-prose' -and
+            $hCarbNormal.Result.primary_effort -eq 'high' -and
+            $hCarbNormal.Result.orchestration.fast_tier_offload -eq $false -and
+            $hCarbMath.Exit -eq 0 -and
+            $hCarbMath.Result.primary -eq 'syn-rigor' -and
+            $hCarbMath.Result.primary_effort -eq 'xhigh'
+        ) 'HostModel carbon resolves carbon_peak with flagship ownership and peak_effort on math'
+        Assert-RTest (
+            $hCarbBulk.Exit -eq 0 -and
+            $hCarbBulk.Result.primary -eq 'syn-fast' -and
+            $hCarbBulk.Result.primary_effort -eq 'high' -and
+            $hCarbBulk.Result.orchestration.fast_tier_offload -eq $true -and
+            $hCarbBulk.Result.reviewer -eq 'syn-rigor' -and
+            $hCarbBulkEsc.Exit -eq 0 -and
+            $hCarbBulkEsc.Result.primary -eq 'syn-prose' -and
+            $hCarbCoDraft.Exit -eq 0 -and
+            $hCarbCoDraft.Result.orchestration.co_drafter -eq 'syn-fast' -and
+            $hCarbCoDraft.Result.orchestration.co_drafter_effort -eq 'high'
+        ) 'carbon_peak offloads bulk,scan and mechanical co_drafter to 4H at high effort unless escalated'
+
+        $hHydBug = Invoke-RTest 'bugfix' -ModeName '' -HostModel '4H Extra'
+        $hHydScan = Invoke-RTest 'scan' -ModeName '' -HostModel 'hydrogen'
+        $hHydTestGen = Invoke-RTest 'test_gen' -ModeName 'hydrogen_max'
+        $hHydPaper = Invoke-RTest 'prose,paper' -ModeName 'hydrogen_max'
+        $hHydArch = Invoke-RTest 'architecture' -ModeName 'hydrogen_max'
+        $hHydProseArch = Invoke-RTest 'prose,architecture' -ModeName 'hydrogen_max'
+        $hHydArchNoRigor = Invoke-RTest 'architecture' -ModeName 'hydrogen_max' -Excluded 'syn-rigor'
+        $hHydFrontNoAes = Invoke-RTest 'frontend' -ModeName 'hydrogen_max' -Excluded 'syn-aesthetic'
+        $hHydFrontOnlyGemini = Invoke-RTest 'frontend' -ModeName 'hydrogen_max' -Excluded 'syn-aesthetic,syn-rigor'
+        $hHydFrontSolo = Invoke-RTest 'frontend' -ModeName 'hydrogen_max' -Excluded 'syn-aesthetic,syn-rigor,syn-prose'
+        $hCarbSelfReview = Invoke-RTest 'frontend' -ModeName 'carbon_peak' -Excluded 'syn-aesthetic'
+        $hHydPaperEsc = Invoke-RTest 'prose,paper' -ModeName 'hydrogen_max' -Escalate
+        Assert-RTest (
+            $hHydBug.Exit -eq 0 -and
+            $hHydBug.Result.mode -eq 'hydrogen_max' -and
+            $hHydBug.Result.orchestration.host_mode -eq 'hydrogen_max' -and
+            $hHydBug.Result.primary -eq 'syn-rigor' -and
+            $hHydBug.Result.reviewer -eq 'syn-fast' -and
+            $hHydBug.Result.reviewer_effort -eq 'xhigh' -and
+            $hHydBug.Result.orchestration.co_drafter -eq 'syn-fast' -and
+            $null -eq $hHydBug.Result.orchestration.final_reviewer -and
+            @($hHydBug.Result.orchestration.final_review_triggers) -contains 'paper'
+        ) 'HostModel hydrogen/4H resolves hydrogen_max, offloads Carbon bugfix roles, and sets final_reviewer to null on normal tasks'
+        Assert-RTest (
+            $hHydScan.Exit -eq 0 -and
+            $hHydScan.Result.mode -eq 'hydrogen_max' -and
+            $hHydScan.Result.primary -eq 'syn-fast' -and
+            $hHydScan.Result.primary_effort -eq 'high' -and
+            $null -eq $hHydScan.Result.orchestration.final_reviewer -and
+            $hHydTestGen.Exit -eq 0 -and
+            $hHydTestGen.Result.reviewer -eq 'syn-fast' -and
+            $hHydTestGen.Result.reviewer_effort -eq 'high'
+        ) 'hydrogen_max runs mechanical scan/test_gen 4H primary and reviewer at high effort'
+        Assert-RTest (
+            $hHydPaper.Exit -eq 0 -and
+            $hHydPaper.Result.primary -eq 'syn-fast' -and
+            $hHydPaper.Result.primary_effort -eq 'xhigh' -and
+            $null -eq $hHydPaper.Result.polisher -and
+            $hHydPaper.Result.orchestration.final_reviewer -eq 'syn-prose' -and
+            $hHydArch.Exit -eq 0 -and
+            $hHydArch.Result.primary -eq 'syn-rigor' -and
+            $hHydArch.Result.reviewer -eq 'syn-fast' -and
+            $hHydArch.Result.orchestration.final_reviewer -eq 'syn-prose' -and
+            $hHydProseArch.Exit -eq 0 -and
+            $hHydProseArch.Result.primary -eq 'syn-prose' -and
+            $null -eq $hHydProseArch.Result.orchestration.final_reviewer -and
+            $hHydArchNoRigor.Exit -eq 0 -and
+            $hHydArchNoRigor.Result.primary -eq 'syn-prose' -and
+            $null -eq $hHydArchNoRigor.Result.orchestration.final_reviewer -and
+            $hHydPaperEsc.Exit -eq 0 -and
+            $hHydPaperEsc.Result.primary -eq 'syn-prose' -and
+            $null -eq $hHydPaperEsc.Result.orchestration.final_reviewer
+        ) 'hydrogen_max sets final_reviewer on final_review_triggers while honoring min_cap and avoiding self-review on Carbon primary'
+        Assert-RTest (
+            $hHydFrontNoAes.Exit -eq 0 -and
+            $hHydFrontNoAes.Result.primary -eq 'syn-fast' -and
+            $hHydFrontNoAes.Result.reviewer -eq 'syn-rigor' -and
+            $hHydFrontNoAes.Result.self_review -eq $false -and
+            $hHydFrontNoAes.Result.orchestration.active_verifier -eq $true -and
+            $hHydFrontOnlyGemini.Exit -eq 0 -and
+            $hHydFrontOnlyGemini.Result.primary -eq 'syn-fast' -and
+            $hHydFrontOnlyGemini.Result.reviewer -eq 'syn-prose' -and
+            $hHydFrontOnlyGemini.Result.self_review -eq $false -and
+            $hHydFrontOnlyGemini.Result.orchestration.active_verifier -eq $true -and
+            $hHydFrontSolo.Exit -eq 0 -and
+            $hHydFrontSolo.Result.primary -eq 'syn-fast' -and
+            $null -eq $hHydFrontSolo.Result.reviewer -and
+            $hHydFrontSolo.Result.blocked -eq $true -and
+            $hHydFrontSolo.Result.orchestration.active_verifier -eq $false -and
+            $hCarbSelfReview.Exit -eq 0 -and
+            $hCarbSelfReview.Result.primary -eq 'syn-prose' -and
+            $hCarbSelfReview.Result.reviewer -eq 'syn-prose' -and
+            $hCarbSelfReview.Result.self_review -eq $true -and
+            $hCarbSelfReview.Result.orchestration.active_verifier -eq $false
+        ) 'hydrogen_max avoids 4H self-review when aesthetic gate falls back and sets active_verifier false on self-review or blocked'
     }
     finally {
         Save-RTestFixture $fixture

@@ -12,6 +12,8 @@ param(
     [string]$OutFile,
     [string]$JsonSchema,
     [string[]]$Tags = @(),
+    [string[]]$ContextFiles = @(),
+    [switch]$StreamStdout,
     [int]$TimeoutSec = 1800,
     [int]$ConnectTimeoutSec = 0,
     [switch]$AllowCodexShell,
@@ -33,8 +35,18 @@ function New-InvocationCapture {
         phase = 'starting'; last_event_type = $null
         auth_interrupted = $false; resume_incompatible = $false
         agy_not_logged_in = $false
+        input_tokens = $null; output_tokens = $null; thinking_tokens = $null
+        cached_tokens = $null; total_tokens = $null
         diagnostics = New-Object 'System.Collections.Generic.List[string]'
     }
+}
+
+function ConvertTo-NullableLong {
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [string] -and [string]::IsNullOrWhiteSpace($Value)) { return $null }
+    try { return [long]$Value }
+    catch { return $null }
 }
 
 function Get-ReplanCircuitBreaker {
@@ -95,6 +107,9 @@ $liveStatusPath = $null
 $latestChannelStatusPath = $null
 $explicitStatusPath = $null
 $reportedStatusFile = $null
+$eventsLogPath = $null
+$eventsWriter = $null
+$contextFilesList = New-Object 'System.Collections.Generic.List[string]'
 $startedUtc = (Get-OrchestraNow).ToString('o')
 $rotationEnabled = $false
 $rotationWaitMs = 0
@@ -126,6 +141,50 @@ try {
     }
     if ([string]::IsNullOrWhiteSpace($Prompt)) {
         throw 'ORCHESTRA_ARGS: Prompt cannot be empty.'
+    }
+    $seenCtx = @{}
+    foreach ($rawCtx in @($ContextFiles)) {
+        if ($null -eq $rawCtx) { continue }
+        foreach ($part in ([string]$rawCtx -split ',')) {
+            $trimmedCtx = $part.Trim()
+            if ($trimmedCtx.Length -eq 0) { continue }
+            $resolvedCtx = $trimmedCtx
+            if (-not [IO.Path]::IsPathRooted($resolvedCtx)) {
+                $resolvedCtx = Join-Path $WorkDir $resolvedCtx
+            }
+            $resolvedCtx = [IO.Path]::GetFullPath($resolvedCtx)
+            if (-not [IO.File]::Exists($resolvedCtx)) {
+                throw 'ORCHESTRA_ARGS: ContextFile does not exist.'
+            }
+            $ctxKey = $resolvedCtx.ToLowerInvariant()
+            if (-not $seenCtx.ContainsKey($ctxKey)) {
+                $seenCtx[$ctxKey] = $true
+                [void]$contextFilesList.Add($resolvedCtx)
+            }
+        }
+    }
+    if ($contextFilesList.Count -gt 0) {
+        $ctxBlocks = New-Object 'System.Collections.Generic.List[string]'
+        foreach ($ctxPath in $contextFilesList) {
+            $rawBytes = [IO.File]::ReadAllBytes($ctxPath)
+            $ctxText = if (
+                $rawBytes.Length -ge 3 -and
+                $rawBytes[0] -eq 0xEF -and $rawBytes[1] -eq 0xBB -and $rawBytes[2] -eq 0xBF
+            ) {
+                [System.Text.Encoding]::UTF8.GetString($rawBytes, 3, $rawBytes.Length - 3)
+            }
+            else {
+                [System.Text.Encoding]::UTF8.GetString($rawBytes)
+            }
+            if ($ctxText.Length -gt 0 -and $ctxText[0] -eq [char]0xFEFF) {
+                $ctxText = $ctxText.Substring(1)
+            }
+            $ctxText = ($ctxText -replace "\r\n?", "`n").TrimEnd("`n")
+            $ctxFileName = [IO.Path]::GetFileName($ctxPath)
+            [void]$ctxBlocks.Add(("=====CONTEXT_PACK: $ctxFileName=====`n$ctxText`n=====END_CONTEXT_PACK====="))
+        }
+        $staticPrefix = ($ctxBlocks.ToArray() -join "`n`n")
+        $Prompt = $staticPrefix + "`n`n=====TASK_INSTRUCTIONS=====`n" + $Prompt
     }
     $paths = Get-OrchestraPaths -RegistryPath $RegistryPath -StateDir $StateDir
     if ($adHoc) {
@@ -188,21 +247,42 @@ try {
     )
     if ([string]::IsNullOrWhiteSpace($Effort)) {
         $Effort = [string](Get-OrchestraProperty $invoke 'default_effort')
-        if (-not $adHoc -and $null -ne $policy -and $Tags.Count -gt 0) {
-            $peakEffort = [string](Get-OrchestraProperty $invoke 'peak_effort' '')
+        if (-not $adHoc -and $Tags.Count -gt 0) {
             $peakTags = @(
-                Get-OrchestraArray $policy 'peak_effort_tags' |
-                    ForEach-Object { [string]$_ }
+                if ($null -ne $policy) {
+                    Get-OrchestraArray $policy 'peak_effort_tags' |
+                        ForEach-Object { [string]$_ }
+                }
             )
             $hitsPeak = (
                 @($Tags | Where-Object { $peakTags -contains $_ }).Count -gt 0
             )
-            if (
-                -not [string]::IsNullOrWhiteSpace($peakEffort) -and
-                $hitsPeak -and
-                ($supportedEfforts -contains $peakEffort)
-            ) {
-                $Effort = $peakEffort
+            if ($null -ne $policy) {
+                $peakEffort = [string](Get-OrchestraProperty $invoke 'peak_effort' '')
+                if (
+                    -not [string]::IsNullOrWhiteSpace($peakEffort) -and
+                    $hitsPeak -and
+                    ($supportedEfforts -contains $peakEffort)
+                ) {
+                    $Effort = $peakEffort
+                }
+            }
+            $modelTier = [string](Get-OrchestraProperty $modelObject 'tier' '')
+            if ($modelTier -eq 'fast' -and $Effort -eq 'xhigh' -and ($supportedEfforts -contains 'high')) {
+                $rawMech = if ($null -ne $policy) {
+                    Get-OrchestraProperty $policy 'mechanical_fast_tags' $null
+                }
+                else { $null }
+                $mechTags = if ($null -eq $rawMech) {
+                    @('bulk', 'boilerplate', 'scan', 'test_gen')
+                }
+                else {
+                    @($rawMech | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                }
+                $hitsMech = (@($Tags | Where-Object { $mechTags -contains $_ }).Count -gt 0)
+                if ($hitsMech -and -not $hitsPeak) {
+                    $Effort = 'high'
+                }
             }
         }
     }
@@ -330,6 +410,9 @@ try {
         if ($hasPromptFile) {
             [void]$extraDirCandidates.Add([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($PromptFile)))
         }
+        foreach ($ctxPath in $contextFilesList) {
+            [void]$extraDirCandidates.Add([IO.Path]::GetDirectoryName($ctxPath))
+        }
         if ($null -ne $outputPath) {
             [void]$extraDirCandidates.Add([IO.Path]::GetDirectoryName($outputPath))
         }
@@ -433,6 +516,40 @@ try {
             else {
                 Join-Path $liveDir 'latest-agy.json'
             }
+            try {
+                [void][IO.Directory]::CreateDirectory($liveDir)
+                $pruneCutoff = (Get-OrchestraNow).AddDays(-7)
+                foreach ($oldEventsFile in [IO.Directory]::GetFiles($liveDir, '*.events.jsonl')) {
+                    try {
+                        if ([IO.File]::GetLastWriteTimeUtc($oldEventsFile) -lt $pruneCutoff) {
+                            [IO.File]::Delete($oldEventsFile)
+                        }
+                    }
+                    catch {}
+                }
+            }
+            catch {}
+            $eventsLogPath = Join-Path $liveDir ($invocationId + '.events.jsonl')
+            $eventsStream = $null
+            try {
+                $eventsStream = [IO.File]::Open(
+                    $eventsLogPath, [IO.FileMode]::OpenOrCreate,
+                    [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite
+                )
+                [void]$eventsStream.Seek(0, [IO.SeekOrigin]::End)
+                $eventsWriter = New-Object IO.StreamWriter($eventsStream, $script:OrchestraUtf8)
+                $eventsWriter.AutoFlush = $true
+            }
+            catch {
+                if ($null -ne $eventsWriter) {
+                    try { $eventsWriter.Dispose() } catch {}
+                    $eventsWriter = $null
+                }
+                elseif ($null -ne $eventsStream) {
+                    try { $eventsStream.Dispose() } catch {}
+                }
+                $eventsLogPath = $null
+            }
         }
         $reportedStatusFile = if ($null -ne $explicitStatusPath) {
             $explicitStatusPath
@@ -515,8 +632,13 @@ try {
                 return
             }
             $capture.events_count++
-            [Console]::Out.WriteLine($Line)
-            [Console]::Out.Flush()
+            if ($null -ne $eventsWriter) {
+                try { $eventsWriter.WriteLine($Line) } catch {}
+            }
+            if ($StreamStdout) {
+                [Console]::Out.WriteLine($Line)
+                [Console]::Out.Flush()
+            }
             if ($channel -eq 'codex') {
                 $type = [string](Get-OrchestraProperty $eventObject 'type')
                 if ($type -eq 'thread.started') {
@@ -557,6 +679,25 @@ try {
                     }
                 }
                 if ($type -eq 'turn.completed') {
+                    $usageObj = Get-OrchestraProperty $eventObject 'usage'
+                    if ($null -ne $usageObj) {
+                        $capture.input_tokens = ConvertTo-NullableLong (Get-OrchestraProperty $usageObj 'input_tokens')
+                        $capture.output_tokens = ConvertTo-NullableLong (Get-OrchestraProperty $usageObj 'output_tokens')
+                        $capture.thinking_tokens = ConvertTo-NullableLong (Get-OrchestraProperty $usageObj 'thinking_tokens')
+                        $cachedVal = ConvertTo-NullableLong (Get-OrchestraProperty $usageObj 'cached_input_tokens')
+                        if ($null -eq $cachedVal) {
+                            $cachedVal = ConvertTo-NullableLong (Get-OrchestraProperty $usageObj 'cached_tokens')
+                        }
+                        $capture.cached_tokens = $cachedVal
+                        $capture.total_tokens = ConvertTo-NullableLong (Get-OrchestraProperty $usageObj 'total_tokens')
+                        if (
+                            $null -eq $capture.total_tokens -and
+                            $null -ne $capture.input_tokens -and
+                            $null -ne $capture.output_tokens
+                        ) {
+                            $capture.total_tokens = [long]$capture.input_tokens + [long]$capture.output_tokens
+                        }
+                    }
                     $capture.saw_completion = $true
                     $null = & $writeStatus 'completed' 'turn.completed' $null
                 }
@@ -580,6 +721,32 @@ try {
                 }
                 elseif ($eventName -eq 'result') {
                     $resultObject = Get-OrchestraProperty $eventObject 'result'
+                    $usageObj = Get-OrchestraProperty $resultObject 'usage'
+                    if ($null -eq $usageObj) {
+                        $usageObj = Get-OrchestraProperty $eventObject 'usage'
+                    }
+                    if ($null -ne $usageObj) {
+                        $capture.input_tokens = ConvertTo-NullableLong (Get-OrchestraProperty $usageObj 'input_tokens')
+                        $capture.output_tokens = ConvertTo-NullableLong (Get-OrchestraProperty $usageObj 'output_tokens')
+                        $capture.thinking_tokens = ConvertTo-NullableLong (Get-OrchestraProperty $usageObj 'thinking_tokens')
+                        $cacheRead = ConvertTo-NullableLong (Get-OrchestraProperty $usageObj 'cache_read_tokens')
+                        if ($null -eq $cacheRead) {
+                            $cacheRead = ConvertTo-NullableLong (Get-OrchestraProperty $usageObj 'cached_tokens')
+                        }
+                        if ($null -eq $cacheRead) {
+                            $cacheRead = ConvertTo-NullableLong (Get-OrchestraProperty $usageObj 'cached_input_tokens')
+                        }
+                        $capture.cached_tokens = $cacheRead
+                        $capture.total_tokens = ConvertTo-NullableLong (Get-OrchestraProperty $usageObj 'total_tokens')
+                        if (
+                            $null -eq $capture.total_tokens -and
+                            $null -ne $capture.input_tokens -and
+                            $null -ne $capture.output_tokens
+                        ) {
+                            $thinkAdd = if ($null -ne $capture.thinking_tokens) { [long]$capture.thinking_tokens } else { 0L }
+                            $capture.total_tokens = [long]$capture.input_tokens + [long]$capture.output_tokens + $thinkAdd
+                        }
+                    }
                     $session = [string](Get-OrchestraProperty $resultObject 'conversation_id')
                     if (-not [string]::IsNullOrWhiteSpace($session)) {
                         $capture.session_id = $session
@@ -864,6 +1031,14 @@ catch {
     [Console]::Error.WriteLine($errorMessage)
 }
 finally {
+    if ($null -ne $eventsWriter) {
+        try {
+            $eventsWriter.Flush()
+            $eventsWriter.Dispose()
+        }
+        catch {}
+        $eventsWriter = $null
+    }
     if ($null -ne $temporaryPrompt -and [IO.File]::Exists($temporaryPrompt)) {
         try { [IO.File]::Delete($temporaryPrompt) }
         catch {
@@ -876,6 +1051,24 @@ finally {
 
 $watch.Stop()
 $duration = [Math]::Round($watch.Elapsed.TotalSeconds, 3)
+$cacheHitRate = if (
+    $null -ne $capture.input_tokens -and
+    [long]$capture.input_tokens -gt 0 -and
+    $null -ne $capture.cached_tokens
+) {
+    [Math]::Round(([double]$capture.cached_tokens / [double]$capture.input_tokens), 4)
+}
+else {
+    $null
+}
+$usageSummary = [ordered]@{
+    input_tokens = $capture.input_tokens
+    output_tokens = $capture.output_tokens
+    thinking_tokens = $capture.thinking_tokens
+    cached_tokens = $capture.cached_tokens
+    total_tokens = $capture.total_tokens
+    cache_hit_rate = $cacheHitRate
+}
 if (-not $DryRun -and $null -ne $paths -and $null -ne $modelObject) {
     try {
         Add-UsageEvent -Paths $paths -Event @{
@@ -889,6 +1082,7 @@ if (-not $DryRun -and $null -ne $paths -and $null -ne $modelObject) {
             account_switched = [bool]$accountSwitched
             resume_invalidated = [bool]$resumeInvalidated
             replan_required = [bool]$replanRequired
+            usage = $usageSummary
         }
     }
     catch {
@@ -948,6 +1142,9 @@ $finalResult = @{
     proxy = $proxyUrl
     codex_shell_enabled = [bool]$codexShellEnabled
     status_file = $reportedStatusFile
+    events_file = $eventsLogPath
+    context_files_count = [int]$contextFilesList.Count
+    usage = $usageSummary
 }
 foreach ($key in $dryData.Keys) { $finalResult[$key] = $dryData[$key] }
 Write-OrchestraResult -Object $finalResult

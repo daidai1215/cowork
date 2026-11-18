@@ -1,7 +1,7 @@
 # 主力模型优缺点与口碑档案（Model Profiles）
 
 <!-- AUTO:ROSTER:START -->
-> 自动同步自 `registry/models.json` (`registry_rev: 7`, 活跃模型: 4)
+> 自动同步自 `registry/models.json` (`registry_rev: 8`, 活跃模型: 4)
 
 | 模型 | ID / 通道 | 默认档位 | 顶级长板（>=9） | 额度 (`quota_rank`) | 速度 (`speed_rank`) | 运行特性 |
 |---|---|---|---|---|---|---|
@@ -31,7 +31,7 @@
 | PPT / Word / Excel | `office,ppt` | `gpt-6.2-astra` | `claude-opus-5-5` | - | `strength_delegation` |
 | 检索 / 综述 / 大仓库理解 | `research,long_context` | `gemini-4-carbon` | `gpt-6.2-astra` | - | `pipelined_review` |
 
-- **4H Extra 快速模式 (`-Mode fast_4h`)**: 将大部分 `gemini-4-carbon` 任务下放 `gemini-4-hydrogen` (`xhigh`)，仅高要求主写 (`paper`, `essay`, `copywriting`), 高要求审查 (`math`, `algorithm`) 及 `-AllowEscalation` 保留给 `gemini-4-carbon` (后端/数学/生图/Office 主攻仍由 GPT-6.2 Astra 承担):
+- **4H Extra 快速模式 (`-Mode fast_4h`)**: 将大部分 `gemini-4-carbon` 任务下放 `gemini-4-hydrogen` (`xhigh`)，仅高要求主写 (`paper`, `essay`, `copywriting`, `architecture`), 高要求审查 (`math`, `algorithm`, `architecture`) 及 `-AllowEscalation` 保留给 `gemini-4-carbon` (后端/数学/生图/Office 主攻仍由 GPT-6.2 Astra 承担):
 
 | 快速场景 (`fast_4h`) | `-Tags` | 主执行 | 审查 | 升级兜底 |
 |---|---|---|---|---|
@@ -41,6 +41,17 @@
 | 高要求论文 / 深度长文 | `prose,paper` | `gemini-4-carbon` (`high`) | `gpt-6.2-astra` (`high`) | - |
 | 常规后端 / Bugfix | `bugfix` | `gpt-6.2-astra` (`high`) | `gemini-4-hydrogen` (`xhigh`) | - |
 | 数学 / 算法验算 | `math,algorithm` | `gpt-6.2-astra` (`xhigh`) | `gemini-4-carbon` (`high`) | - |
+
+- **主控感知三档自动分层 (`-HostModel orchestrator|carbon|hydrogen`)**: 依据主控环境自动切换 `orchestrator_fast` / `carbon_peak` / `hydrogen_max` (在 `bulk`/`boilerplate`/`scan`/`test_gen` 自动降为 `high` 提速，其余保持 `xhigh`):
+
+| 主控模式 (`-HostModel`) | 典型场景 | `-Tags` | 主执行 (`primary`) | 审查 (`reviewer`) | 终审 (`final_reviewer`) |
+|---|---|---|---|---|---|
+| `orchestrator` -> `orchestrator_fast` | 前端 / 常规研发 | `frontend,landing_page` | `gemini-4-hydrogen` (`xhigh`) | `claude-opus-5-5` (`high`) | - |
+| `orchestrator` -> `orchestrator_fast` | 架构设计 / 复杂后端 | `architecture` | `gpt-6.2-astra` (`high`) | `gemini-4-carbon` (`high`) | - |
+| `carbon` -> `carbon_peak` | 常规旗舰主控 | `frontend,landing_page` | `gemini-4-carbon` (`high`) | `claude-opus-5-5` (`high`) | - |
+| `carbon` -> `carbon_peak` | 批量机械分片 / 仓扫 | `bulk,scan` | `gemini-4-hydrogen` (`high`) | `gpt-6.2-astra` (`high`) | - |
+| `hydrogen` -> `hydrogen_max` | 常规 Bugfix | `bugfix` | `gpt-6.2-astra` (`high`) | `gemini-4-hydrogen` (`xhigh`) | - |
+| `hydrogen` -> `hydrogen_max` | 论文 / 长文终审门禁 | `prose,paper` | `gemini-4-hydrogen` (`xhigh`) | `gpt-6.2-astra` (`high`) | `gemini-4-carbon` |
 <!-- AUTO:ROUTING:END -->
 
 ---

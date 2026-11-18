@@ -41,7 +41,7 @@ function Invoke-TestScript {
     if ($objects.Count -gt 0) { $lastObject = $objects[$objects.Count - 1] }
     return @{
         code = $execution.exit_code; json = $lastObject
-        events = $objects; stderr = $execution.stderr
+        events = $objects; stdout = $execution.stdout; stderr = $execution.stderr
     }
 }
 
@@ -365,6 +365,21 @@ $result = [ordered]@{ status = 'SUCCESS'; response = $case }
 if ($case -ne 'TEST_NO_INIT') { $result.conversation_id = 'mock-session' }
 if ($case -eq 'TEST_SUCCESS') {
     $result.response = 'Successful prose mentioning quota and 429.'
+    $result.usage = @{
+        input_tokens = 1200
+        output_tokens = 300
+        thinking_tokens = 80
+        cache_read_tokens = 900
+        total_tokens = 1580
+    }
+}
+if ($case -eq 'TEST_ZERO_USAGE') {
+    $result.usage = @{
+        input_tokens = 0
+        output_tokens = 10
+        cache_read_tokens = 0
+        total_tokens = 10
+    }
 }
 if ($case -eq 'TEST_QUOTA') {
     $result.status = 'ERROR'
@@ -400,12 +415,62 @@ exit 0
         -not ($answerBytes[0] -eq 239 -and $answerBytes[1] -eq 187 -and
             $answerBytes[2] -eq 191)
     )
-    Assert-Test 'Provider events precede exactly one final result' (
-        @($successRun.events | Where-Object {
+    $successStdoutLines = @($successRun.stdout | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    $eventsFileExists = (-not [string]::IsNullOrWhiteSpace([string]$successRun.json.events_file)) -and [IO.File]::Exists([string]$successRun.json.events_file)
+    $persistedEvents = @()
+    if ($eventsFileExists) {
+        $persistedEvents = @(
+            [IO.File]::ReadAllLines([string]$successRun.json.events_file, $script:OrchestraUtf8) |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                ForEach-Object { $_ | ConvertFrom-Json }
+        )
+    }
+    Assert-Test 'Default invocation emits single stdout result and persists raw events to events_file' (
+        $successStdoutLines.Count -eq 1 -and
+        $successRun.events.Count -eq 1 -and
+        $successRun.json.orchestra_result -eq $true -and
+        $eventsFileExists -and
+        $persistedEvents.Count -eq 2 -and
+        (Get-OrchestraProperty $persistedEvents[0] 'event') -eq 'init' -and
+        (Get-OrchestraProperty $persistedEvents[1] 'event') -eq 'result'
+    )
+    $agyUsageEvt = @(Read-UsageEvents -Paths $script:TestPaths | Where-Object {
+        (Get-OrchestraProperty $_ 'invocation_id') -eq $successRun.json.invocation_id
+    })
+    Assert-Test 'Agy usage and cache_read_tokens telemetry extracted into result and usage.jsonl' (
+        $null -ne $successRun.json.usage -and
+        $successRun.json.usage.input_tokens -eq 1200 -and
+        $successRun.json.usage.output_tokens -eq 300 -and
+        $successRun.json.usage.thinking_tokens -eq 80 -and
+        $successRun.json.usage.cached_tokens -eq 900 -and
+        $successRun.json.usage.total_tokens -eq 1580 -and
+        $successRun.json.usage.cache_hit_rate -eq 0.75 -and
+        $agyUsageEvt.Count -eq 1 -and
+        $agyUsageEvt[0].usage.cached_tokens -eq 900 -and
+        $agyUsageEvt[0].usage.cache_hit_rate -eq 0.75
+    )
+
+    $streamRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @(
+            '-Model', 'gemini-4-carbon', '-Prompt', 'TEST_SUCCESS', '-StreamStdout'
+        )
+    )
+    Assert-Test 'Provider events precede exactly one final result with -StreamStdout' (
+        $streamRun.code -eq 0 -and
+        @($streamRun.events | Where-Object {
             (Get-OrchestraProperty $_ 'orchestra_result' $false) -eq $true
         }).Count -eq 1 -and
-        (Get-OrchestraProperty $successRun.events[0] 'event') -eq 'init' -and
-        $successRun.json.orchestra_result -eq $true
+        (Get-OrchestraProperty $streamRun.events[0] 'event') -eq 'init' -and
+        $streamRun.json.orchestra_result -eq $true
+    )
+
+    $zeroUsageRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gemini-4-carbon', '-Prompt', 'TEST_ZERO_USAGE')
+    )
+    Assert-Test 'Zero input tokens keeps cache_hit_rate null without division error' (
+        $zeroUsageRun.code -eq 0 -and
+        $zeroUsageRun.json.usage.input_tokens -eq 0 -and
+        $null -eq $zeroUsageRun.json.usage.cache_hit_rate
     )
     $noInitRun = Invoke-TestScript -Script $invokeScript -Arguments (
         $baseArguments + @('-Model', 'gemini-4-carbon', '-Prompt', 'TEST_NO_INIT')
@@ -598,7 +663,12 @@ if ($case -eq 'SUCCESS_TEXT') {
     [Console]::WriteLine('{"type":"item.completed","item":{"type":"agent_message","text":"quota 429 invalid_encrypted_content"}}')
 }
 [Console]::WriteLine(('{"type":"thread.started","thread_id":"mock-codex-' + $count + '"}'))
-[Console]::WriteLine('{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}')
+if ($case -eq 'USAGE_CACHE') {
+    [Console]::WriteLine('{"type":"turn.completed","usage":{"input_tokens":800,"cached_input_tokens":600,"output_tokens":200}}')
+}
+else {
+    [Console]::WriteLine('{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}')
+}
 exit 0
 '@
     [IO.File]::WriteAllText($fakeCodexPath, $fakeCodexText, $script:OrchestraUtf8)
@@ -694,6 +764,20 @@ exit 0
             $transition.run.json.account_switched
         )
     }
+    $caseUsage = Invoke-CodexCase 'USAGE_CACHE'
+    $codexUsageEvents = @(Read-UsageEvents -Paths $caseUsage.paths)
+    Assert-Test 'Codex cached_input_tokens telemetry extracted and persisted to usage.jsonl' (
+        $caseUsage.run.code -eq 0 -and
+        $null -ne $caseUsage.run.json.usage -and
+        $caseUsage.run.json.usage.input_tokens -eq 800 -and
+        $caseUsage.run.json.usage.cached_tokens -eq 600 -and
+        $caseUsage.run.json.usage.output_tokens -eq 200 -and
+        $caseUsage.run.json.usage.total_tokens -eq 1000 -and
+        $caseUsage.run.json.usage.cache_hit_rate -eq 0.75 -and
+        $codexUsageEvents.Count -eq 1 -and
+        $codexUsageEvents[0].usage.cached_tokens -eq 600 -and
+        $codexUsageEvents[0].usage.total_tokens -eq 1000
+    )
 
     $quietHome = Join-Path $sandbox 'quiet home'
     [void][IO.Directory]::CreateDirectory($quietHome)
@@ -1182,6 +1266,142 @@ exit 0
     Assert-Test 'extract-files writes valid shard files cleanly' (
         $extClean.exit_code -eq 0 -and
         [IO.File]::Exists((Join-Path $extractRoot 'src\auth\allowed.txt'))
+    )
+
+    # -ContextFiles tests: BOM stripping, CRLF->LF, static prefix top, TASK_INSTRUCTIONS, Codex --add-dir dedup, missing error
+    $ctxWork = Join-Path $sandbox 'ctx-work'
+    $ctxRelDir = Join-Path $ctxWork 'rel'
+    $ctxExtDir = Join-Path $sandbox 'ctx-ext'
+    [void][IO.Directory]::CreateDirectory($ctxRelDir)
+    [void][IO.Directory]::CreateDirectory($ctxExtDir)
+    $ctxFile1 = Join-Path $ctxExtDir 'pack1.md'
+    $ctxFile2 = Join-Path $ctxExtDir 'pack2.md'
+    $ctxFile3 = Join-Path $ctxRelDir 'local.md'
+    $bomBytes = [byte[]](0xEF, 0xBB, 0xBF) + $script:OrchestraUtf8.GetBytes("alpha`r`nbeta`r`n")
+    [IO.File]::WriteAllBytes($ctxFile1, $bomBytes)
+    [IO.File]::WriteAllText($ctxFile2, "gamma`r`ndelta", $script:OrchestraUtf8)
+    [IO.File]::WriteAllText($ctxFile3, "relone`r`nreltwo`r`n", $script:OrchestraUtf8)
+    $ctxOut = Join-Path $ctxExtDir 'ctx-out.md'
+
+    $ctxCodexRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $fixtureState,
+        '-WorkDir', $ctxWork, '-Model', 'gpt-6-astra',
+        '-ContextFiles', "$ctxFile1,$ctxFile2,rel\local.md",
+        '-OutFile', $ctxOut, '-Prompt', 'DYNAMIC_TASK_BODY', '-DryRun'
+    )
+    $ctxStdin = [string]$ctxCodexRun.json.stdin
+    $ctxArgv = @($ctxCodexRun.json.arguments)
+    $ctxAddDirValues = @(
+        for ($ai = 0; $ai -lt ($ctxArgv.Count - 1); $ai++) {
+            if ($ctxArgv[$ai] -eq '--add-dir') { $ctxArgv[$ai + 1] }
+        }
+    )
+    $expectedPrefix = @(
+        "=====CONTEXT_PACK: pack1.md====="
+        "alpha"
+        "beta"
+        "=====END_CONTEXT_PACK====="
+        ""
+        "=====CONTEXT_PACK: pack2.md====="
+        "gamma"
+        "delta"
+        "=====END_CONTEXT_PACK====="
+        ""
+        "=====CONTEXT_PACK: local.md====="
+        "relone"
+        "reltwo"
+        "=====END_CONTEXT_PACK====="
+        ""
+        "=====TASK_INSTRUCTIONS====="
+        "DYNAMIC_TASK_BODY"
+    ) -join "`n"
+    Assert-Test 'ContextFiles builds deterministic top prefix, strips BOM/CR, and deduplicates Codex --add-dir' (
+        $ctxCodexRun.code -eq 0 -and
+        $ctxCodexRun.json.context_files_count -eq 3 -and
+        $ctxStdin -ceq $expectedPrefix -and
+        -not $ctxStdin.Contains("`r") -and
+        -not $ctxStdin.Contains([char]0xFEFF) -and
+        $ctxAddDirValues.Count -eq 1 -and
+        $ctxAddDirValues[0] -ieq $ctxExtDir
+    )
+
+    $ctxAgyRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $fixtureState,
+        '-WorkDir', $ctxWork, '-Model', 'claude-opus-5-5',
+        '-ContextFiles', $ctxFile1,
+        '-Prompt', 'AGY_DYNAMIC', '-DryRun'
+    )
+    $agyPIdx = [Array]::IndexOf(@($ctxAgyRun.json.arguments), '-p')
+    $agyPromptArg = if ($agyPIdx -ge 0) { [string]$ctxAgyRun.json.arguments[$agyPIdx + 1] } else { '' }
+    Assert-Test 'ContextFiles prepends static pack on agy channel too' (
+        $ctxAgyRun.code -eq 0 -and
+        $ctxAgyRun.json.context_files_count -eq 1 -and
+        $agyPromptArg.StartsWith("=====CONTEXT_PACK: pack1.md=====`nalpha`nbeta`n=====END_CONTEXT_PACK=====`n`n=====TASK_INSTRUCTIONS=====`nAGY_DYNAMIC")
+    )
+
+    $ctxMissingRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $fixtureState,
+        '-WorkDir', $ctxWork, '-Model', 'gpt-6-astra',
+        '-ContextFiles', 'does-not-exist.md', '-Prompt', 'TEST', '-DryRun'
+    )
+    Assert-Test 'Missing ContextFile fails closed with exit 2' (
+        $ctxMissingRun.code -eq 2 -and
+        [string]$ctxMissingRun.json.error -match 'ORCHESTRA_ARGS: ContextFile does not exist\.'
+    )
+
+    # .events.jsonl 7-day pruning test (honor Get-OrchestraNow)
+    $pruneState = Join-Path $sandbox 'prune-state'
+    $pruneLive = Join-Path $pruneState 'live'
+    [void][IO.Directory]::CreateDirectory($pruneLive)
+    $staleEventLog = Join-Path $pruneLive 'stale-run.events.jsonl'
+    $freshEventLog = Join-Path $pruneLive 'fresh-run.events.jsonl'
+    [IO.File]::WriteAllText($staleEventLog, '{"event":"init"}' + "`n", $script:OrchestraUtf8)
+    [IO.File]::WriteAllText($freshEventLog, '{"event":"init"}' + "`n", $script:OrchestraUtf8)
+    [IO.File]::SetLastWriteTimeUtc($staleEventLog, (Get-OrchestraNow).AddDays(-8))
+    [IO.File]::SetLastWriteTimeUtc($freshEventLog, (Get-OrchestraNow).AddDays(-2))
+    $pruneRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $pruneState,
+        '-WorkDir', $sandbox, '-Model', 'claude-opus-5-5', '-Prompt', 'TEST_SUCCESS'
+    )
+    Assert-Test 'Invoke prunes .events.jsonl older than 7 days while keeping recent logs' (
+        $pruneRun.code -eq 0 -and
+        -not [IO.File]::Exists($staleEventLog) -and
+        [IO.File]::Exists($freshEventLog) -and
+        [IO.File]::Exists([string]$pruneRun.json.events_file)
+    )
+
+    # 4H Mechanical high auto-downgrade tests (with default fallback tags and configured mechanical_fast_tags)
+    $h4Reg = Read-JsonFile -Path $fixtureRegistry
+    $h4Model = New-TestModel 'gemini-4-hydrogen' 'agy'
+    Set-OrchestraProperty $h4Model 'tier' 'fast'
+    Set-OrchestraProperty $h4Model.invoke 'efforts' @('low', 'medium', 'high', 'xhigh')
+    Set-OrchestraProperty $h4Model.invoke 'default_effort' 'xhigh'
+    Set-OrchestraProperty $h4Model.invoke 'peak_effort' 'xhigh'
+    Set-OrchestraProperty $h4Reg 'models' (@($h4Reg.models) + @($h4Model))
+    Write-JsonAtomic -Path $fixtureRegistry -Object $h4Reg
+
+    $h4ScanRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gemini-4-hydrogen', '-Tags', 'scan', '-Prompt', 'TEST', '-DryRun')
+    )
+    $h4BulkRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gemini-4-hydrogen', '-Tags', 'bulk', '-Prompt', 'TEST', '-DryRun')
+    )
+    $h4BugfixRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gemini-4-hydrogen', '-Tags', 'bugfix', '-Prompt', 'TEST', '-DryRun')
+    )
+    $h4PeakOverrideRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gemini-4-hydrogen', '-Tags', 'scan,math', '-Prompt', 'TEST', '-DryRun')
+    )
+    $h4ExplicitRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gemini-4-hydrogen', '-Tags', 'scan', '-Effort', 'xhigh', '-Prompt', 'TEST', '-DryRun')
+    )
+    Assert-Test '4H fast model auto-downgrades mechanical scan/bulk tags to high while keeping bugfix/peak/explicit at xhigh' (
+        $h4ScanRun.code -eq 0 -and $h4ScanRun.json.effort -eq 'high' -and
+        (@($h4ScanRun.json.arguments) -contains 'gemini-4-hydrogen-high') -and
+        $h4BulkRun.code -eq 0 -and $h4BulkRun.json.effort -eq 'high' -and
+        $h4BugfixRun.code -eq 0 -and $h4BugfixRun.json.effort -eq 'xhigh' -and
+        $h4PeakOverrideRun.code -eq 0 -and $h4PeakOverrideRun.json.effort -eq 'xhigh' -and
+        $h4ExplicitRun.code -eq 0 -and $h4ExplicitRun.json.effort -eq 'xhigh'
     )
 }
 catch {

@@ -177,6 +177,18 @@ function Build-RosterBlock {
     return ($lines.ToArray() -join "`n")
 }
 
+function Format-RouteModelCell {
+    param($ModelName, [string]$Effort, [bool]$IsBlocked = $false, [bool]$CheckBlocked = $false)
+    if ($CheckBlocked -and ($IsBlocked -or $null -eq $ModelName)) {
+        return 'BLOCKED'
+    }
+    if ($null -eq $ModelName) { return '-' }
+    if (-not [string]::IsNullOrWhiteSpace($Effort)) {
+        return ('`{0}` (`{1}`)' -f [string]$ModelName, $Effort)
+    }
+    return ('`' + [string]$ModelName + '`')
+}
+
 function Build-RoutingBlock {
     param($Registry, [string]$RouteScript, [string]$RegistryFile, [string]$EmptyStateDir)
     $aliasesObj = Get-OrchestraProperty $Registry 'aliases'
@@ -271,19 +283,54 @@ function Build-RoutingBlock {
         foreach ($fsc in $fastScenarios) {
             $fr = Invoke-CleanRoute -RouteScript $RouteScript -TagsCsv $fsc.tags -ModeName 'fast_4h' -RegistryFile $RegistryFile -EmptyStateDir $EmptyStateDir
             $fpEff = [string](Get-OrchestraProperty $fr 'primary_effort' '')
-            $fpCell = if ([bool](Get-OrchestraProperty $fr 'blocked' $false) -or $null -eq $fr.primary) {
-                'BLOCKED'
-            }
-            elseif ($fpEff) {
-                '`{0}` (`{1}`)' -f [string]$fr.primary, $fpEff
-            }
-            else {
-                '`' + [string]$fr.primary + '`'
-            }
+            $fpCell = Format-RouteModelCell -ModelName $fr.primary -Effort $fpEff -IsBlocked ([bool](Get-OrchestraProperty $fr 'blocked' $false)) -CheckBlocked $true
             $frEff = [string](Get-OrchestraProperty $fr 'reviewer_effort' '')
-            $frCell = if ($null -eq $fr.reviewer) { '-' } elseif ($frEff) { '`{0}` (`{1}`)' -f [string]$fr.reviewer, $frEff } else { '`' + [string]$fr.reviewer + '`' }
+            $frCell = Format-RouteModelCell -ModelName $fr.reviewer -Effort $frEff
             $feCell = if ($null -eq $fr.escalate_to) { '-' } else { '`' + [string]$fr.escalate_to + '`' }
             [void]$lines.Add(('| {0} | `{1}` | {2} | {3} | {4} |' -f $fsc.label, $fsc.tags, $fpCell, $frCell, $feCell))
+        }
+    }
+
+    $hostTierRows = @(
+        [pscustomobject]@{ host = 'orchestrator'; mode = 'orchestrator_fast'; label = (U '\u524d\u7aef / \u5e38\u89c4\u7814\u53d1'); tags = 'frontend,landing_page' }
+        [pscustomobject]@{ host = 'orchestrator'; mode = 'orchestrator_fast'; label = (U '\u67b6\u6784\u8bbe\u8ba1 / \u590d\u6742\u540e\u7aef'); tags = 'architecture' }
+        [pscustomobject]@{ host = 'carbon'; mode = 'carbon_peak'; label = (U '\u5e38\u89c4\u65d7\u8230\u4e3b\u63a7'); tags = 'frontend,landing_page' }
+        [pscustomobject]@{ host = 'carbon'; mode = 'carbon_peak'; label = (U '\u6279\u91cf\u673a\u68b0\u5206\u7247 / \u4ed3\u626b'); tags = 'bulk,scan' }
+        [pscustomobject]@{ host = 'hydrogen'; mode = 'hydrogen_max'; label = (U '\u5e38\u89c4 Bugfix'); tags = 'bugfix' }
+        [pscustomobject]@{ host = 'hydrogen'; mode = 'hydrogen_max'; label = (U '\u8bba\u6587 / \u957f\u6587\u7ec8\u5ba1\u95e8\u7981'); tags = 'prose,paper' }
+    ) | Where-Object { $null -ne (Get-OrchestraProperty $modesObj $_.mode) }
+
+    if (@($hostTierRows).Count -gt 0) {
+        [void]$lines.Add('')
+        [void]$lines.Add((
+            '- **' + (U '\u4e3b\u63a7\u611f\u77e5\u4e09\u6863\u81ea\u52a8\u5206\u5c42') +
+            ' (`-HostModel orchestrator|carbon|hydrogen`)**: ' +
+            (U '\u4f9d\u636e\u4e3b\u63a7\u73af\u5883\u81ea\u52a8\u5207\u6362') +
+            ' `orchestrator_fast` / `carbon_peak` / `hydrogen_max` (' +
+            (U '\u5728') + ' `bulk`/`boilerplate`/`scan`/`test_gen` ' +
+            (U '\u81ea\u52a8\u964d\u4e3a') + ' `high` ' +
+            (U '\u63d0\u901f\uff0c\u5176\u4f59\u4fdd\u6301') + ' `xhigh`):'
+        ))
+        [void]$lines.Add('')
+        [void]$lines.Add((
+            '| ' + (U '\u4e3b\u63a7\u6a21\u5f0f') + ' (`-HostModel`) | ' +
+            (U '\u5178\u578b\u573a\u666f') + ' | `-Tags` | ' +
+            (U '\u4e3b\u6267\u884c') + ' (`primary`) | ' +
+            (U '\u5ba1\u67e5') + ' (`reviewer`) | ' +
+            (U '\u7ec8\u5ba1') + ' (`final_reviewer`) |'
+        ))
+        [void]$lines.Add('|---|---|---|---|---|---|')
+        foreach ($row in $hostTierRows) {
+            $hr = Invoke-CleanRoute -RouteScript $RouteScript -TagsCsv $row.tags -ModeName $row.mode -RegistryFile $RegistryFile -EmptyStateDir $EmptyStateDir
+            $hpEff = [string](Get-OrchestraProperty $hr 'primary_effort' '')
+            $hpCell = Format-RouteModelCell -ModelName $hr.primary -Effort $hpEff -IsBlocked ([bool](Get-OrchestraProperty $hr 'blocked' $false)) -CheckBlocked $true
+            $hrEff = [string](Get-OrchestraProperty $hr 'reviewer_effort' '')
+            $hrCell = Format-RouteModelCell -ModelName $hr.reviewer -Effort $hrEff
+            $orchObj = Get-OrchestraProperty $hr 'orchestration'
+            $finRev = [string](Get-OrchestraProperty $orchObj 'final_reviewer' '')
+            $hfCell = if ([string]::IsNullOrWhiteSpace($finRev)) { '-' } else { '`' + $finRev + '`' }
+            $modeCell = '`{0}` -> `{1}`' -f $row.host, $row.mode
+            [void]$lines.Add(('| {0} | {1} | `{2}` | {3} | {4} | {5} |' -f $modeCell, $row.label, $row.tags, $hpCell, $hrCell, $hfCell))
         }
     }
     return ($lines.ToArray() -join "`n")

@@ -1,11 +1,11 @@
 # cowork
 
-多模型协同总调度 Skill（面向 **Antigravity (`agy`)**、**OpenAI Codex CLI (`codex`)** 与 **`/swarm` 多智能体编排**共享）。默认以**极致性能（`peak` 模式零额度扣分）**为第一目标，同时支持 **`-Mode fast_4h`（4H Extra `xhigh` 快速分级，将大部分原 Carbon 负载下放 4H Extra，仅少数高要求论文/深度长文与算法复核保留 Carbon）**，以及 **`/swarm` 下经 `cowork` 统一调用 `Claude Opus 5.5` 与 `GPT-6.2 Astra`**。
+多模型协同总调度 Skill（面向 **Antigravity (`agy`)**、**OpenAI Codex CLI (`codex`)** 与 **`/swarm` 多智能体编排**共享）。默认以**极致性能（`peak` 模式零额度扣分）**为第一目标，内置 **Orchestrator 规划期双开 `/swarm` + `/cowork` 全局插件（`cowork-orchestrator`）**、**三档主控感知自动分层（`-HostModel orchestrator|carbon|hydrogen` → `orchestrator_fast` / `carbon_peak` / `hydrogen_max`）**、**单点 Swarm `gatekeeper`** 以及 **Context & KV Prefix Cache 静态前缀锁定与静默事件流协议**。
 
-## 当前主力阵容（默认 `peak` 极致性能 / 按需 `fast_4h` 4H Extra 快速分级）
+## 当前主力阵容（默认 `peak` 极致性能 / 三档主控感知分层）
 
 <!-- AUTO:ROSTER:START -->
-> 自动同步自 `registry/models.json` (`registry_rev: 7`, 活跃模型: 4)
+> 自动同步自 `registry/models.json` (`registry_rev: 8`, 活跃模型: 4)
 
 | 模型 | ID / 通道 | 默认档位 | 顶级长板（>=9） | 额度 (`quota_rank`) | 速度 (`speed_rank`) | 运行特性 |
 |---|---|---|---|---|---|---|
@@ -35,7 +35,7 @@
 | PPT / Word / Excel | `office,ppt` | `gpt-6.2-astra` | `claude-opus-5-5` | - | `strength_delegation` |
 | 检索 / 综述 / 大仓库理解 | `research,long_context` | `gemini-4-carbon` | `gpt-6.2-astra` | - | `pipelined_review` |
 
-- **4H Extra 快速模式 (`-Mode fast_4h`)**: 将大部分 `gemini-4-carbon` 任务下放 `gemini-4-hydrogen` (`xhigh`)，仅高要求主写 (`paper`, `essay`, `copywriting`), 高要求审查 (`math`, `algorithm`) 及 `-AllowEscalation` 保留给 `gemini-4-carbon` (后端/数学/生图/Office 主攻仍由 GPT-6.2 Astra 承担):
+- **4H Extra 快速模式 (`-Mode fast_4h`)**: 将大部分 `gemini-4-carbon` 任务下放 `gemini-4-hydrogen` (`xhigh`)，仅高要求主写 (`paper`, `essay`, `copywriting`, `architecture`), 高要求审查 (`math`, `algorithm`, `architecture`) 及 `-AllowEscalation` 保留给 `gemini-4-carbon` (后端/数学/生图/Office 主攻仍由 GPT-6.2 Astra 承担):
 
 | 快速场景 (`fast_4h`) | `-Tags` | 主执行 | 审查 | 升级兜底 |
 |---|---|---|---|---|
@@ -45,15 +45,30 @@
 | 高要求论文 / 深度长文 | `prose,paper` | `gemini-4-carbon` (`high`) | `gpt-6.2-astra` (`high`) | - |
 | 常规后端 / Bugfix | `bugfix` | `gpt-6.2-astra` (`high`) | `gemini-4-hydrogen` (`xhigh`) | - |
 | 数学 / 算法验算 | `math,algorithm` | `gpt-6.2-astra` (`xhigh`) | `gemini-4-carbon` (`high`) | - |
+
+- **主控感知三档自动分层 (`-HostModel orchestrator|carbon|hydrogen`)**: 依据主控环境自动切换 `orchestrator_fast` / `carbon_peak` / `hydrogen_max` (在 `bulk`/`boilerplate`/`scan`/`test_gen` 自动降为 `high` 提速，其余保持 `xhigh`):
+
+| 主控模式 (`-HostModel`) | 典型场景 | `-Tags` | 主执行 (`primary`) | 审查 (`reviewer`) | 终审 (`final_reviewer`) |
+|---|---|---|---|---|---|
+| `orchestrator` -> `orchestrator_fast` | 前端 / 常规研发 | `frontend,landing_page` | `gemini-4-hydrogen` (`xhigh`) | `claude-opus-5-5` (`high`) | - |
+| `orchestrator` -> `orchestrator_fast` | 架构设计 / 复杂后端 | `architecture` | `gpt-6.2-astra` (`high`) | `gemini-4-carbon` (`high`) | - |
+| `carbon` -> `carbon_peak` | 常规旗舰主控 | `frontend,landing_page` | `gemini-4-carbon` (`high`) | `claude-opus-5-5` (`high`) | - |
+| `carbon` -> `carbon_peak` | 批量机械分片 / 仓扫 | `bulk,scan` | `gemini-4-hydrogen` (`high`) | `gpt-6.2-astra` (`high`) | - |
+| `hydrogen` -> `hydrogen_max` | 常规 Bugfix | `bugfix` | `gpt-6.2-astra` (`high`) | `gemini-4-hydrogen` (`xhigh`) | - |
+| `hydrogen` -> `hydrogen_max` | 论文 / 长文终审门禁 | `prose,paper` | `gemini-4-hydrogen` (`xhigh`) | `gpt-6.2-astra` (`high`) | `gemini-4-carbon` |
 <!-- AUTO:ROUTING:END -->
 
 ## 目录结构
 
 ```text
 cowork/
-├── SKILL.md                          # 主控执行协议（身份识别 → 新模型检测 → 路由 → 协作 → 90s 看门狗 → 自维护）
+├── SKILL.md                          # 主控执行协议（主控感知路由 → 新模型检测 → 协作/KV缓存 → 看门狗 → 自维护）
+├── integrations/
+│   └── cowork-orchestrator-plugin/   # 全局常驻 Antigravity 插件（setup.ps1 自动部署至 ~/.gemini/config/plugins/cowork-orchestrator/）
+│       ├── plugin.json
+│       └── rules/AGENTS.md           # 全对话生效：Orchestrator 规划期双开、三档 -HostModel 与 KV 缓存铁律（<=1.5 KB）
 ├── registry/
-│   ├── models.json                   # 数据化模型档案（10 维能力分、锁定标记、别名、硬规则、轮换与自维护策略）
+│   ├── models.json                   # 数据化模型档案（10 维能力分、锁定标记、别名、硬规则、三档主控策略参数）
 │   ├── research.schema.json          # 新模型联网调研 JSON Schema
 │   ├── probe-grade.schema.json       # 异构匿名盲评输出 JSON Schema
 │   ├── CHANGELOG.md                  # 档案修订日志
@@ -61,12 +76,12 @@ cowork/
 │   └── proposals/                    # 待人工确认的调分/别名/下架提案（跨源按字段路径去重）
 ├── references/
 │   ├── model-profiles.md             # 各主力模型优缺点与避坑指南
-│   ├── collaboration-patterns.md     # 6 种协作模式（含只读契约、Re-plan if 熔断、分片并行、双旗舰竞标）与模板
+│   ├── collaboration-patterns.md     # 协作模式（含三档主控感知、/swarm 单点 gatekeeper 与 KV 缓存协议）与模板
 │   └── research-protocol.md          # 新模型自动调研与异构交叉核验协议
 ├── scripts/
-│   ├── setup.ps1                     # 安装引导与阵容切换器（扫描本机模型 → 自选默认主力/仅审查模型 → 自动评估 10 维性能并同步文档）
-│   ├── route.ps1                     # 按标签与模式（默认 peak 零税冲上限，支持自动升 xhigh 与双旗舰竞标）自动派工
-│   ├── invoke-model.ps1              # 统一跨通道调用入口（含自动升档、Re-plan 熔断检测、Cockpit 自动切号等待与重试）
+│   ├── setup.ps1                     # 安装引导、阵容切换与 cowork-orchestrator 全局插件同步（支持 -SkipGlobalPlugin）
+│   ├── route.ps1                     # 按标签、-HostModel（三档主控感知）与机械降档规则自动派工
+│   ├── invoke-model.ps1              # 统一跨通道调用入口（-ContextFiles 置顶缓存、默认静默流 .events.jsonl、cached_tokens 遥测、Cockpit 切号自愈）
 │   ├── detect-models.ps1             # 自动扫描 agy 与 Codex 目录发现新模型 / 离线模型
 │   ├── research-prompt.ps1           # 生成新模型联网调研提示词（带防并发租约）
 │   ├── apply-research.ps1            # 分级应用调研结果、生成提案与回滚档案
@@ -78,11 +93,28 @@ cowork/
 │   ├── maintain.ps1                  # 一键自我维护与自我升级编排器（含 selftest 门禁回滚与安全 Git 提交）
 │   ├── extract-files.ps1             # 双遍原子落盘（Re-plan 硬熔断拦截 + Allowed/Forbidden 分片白黑名单 + 防穿越/Junction）
 │   ├── sync-to-codex.ps1             # 创建 ~/.codex/skills/cowork Junction 实现双端同源
-│   ├── selftest.ps1                  # 全量静态检查 + 文档防漂移门禁 + 6 套离线回归测试套件
+│   ├── selftest.ps1                  # 全量静态检查 + 文档防漂移门禁 + 7 套离线回归测试套件
 │   └── lib/                          # 公共底层库（文件锁、原子写入、账本幂等归档、SHA-256 凭证指纹、Cockpit 等待）
 ├── evals/                            # 新模型探测题库与测试夹具
-└── tests/                            # 离线回归测试（apply / detect / invoke / maintain / probe / route）
+└── tests/                            # 离线回归测试（apply / detect / invoke / maintain / probe / route / setup）
 ```
+
+## 主控感知加速、多池隔离与 KV 前缀缓存协议
+
+1. **Orchestrator 规划期默认双开（`cowork-orchestrator` 全局常驻规则）**：
+   - 主控为 `Orchestrator (Carbon/Argon)` 时，**即便在只读规划 / 勘察 / 架构拆解阶段，也默认开启 `/swarm` + `/cowork`**，并行派出只读 `4H` 勘察员并经 `/cowork` 异步咨询 `GPT-6.2 Astra`，加速立项并避免单线程 Carbon 阻塞；
+   - Swarm Worker 显式定型防双跳税：编码/勘察用 `model: "gemini-4-hydrogen-xhigh"`，监控与机械扫描用 `model: "gemini-4-hydrogen-high"`，绝不无脑继承 `Orchestrator`。
+2. **三档主控感知自动分层（`route.ps1 -HostModel orchestrator|carbon|hydrogen`）**：
+   - `orchestrator_fast` (`-HostModel orchestrator`)：约 80%+ 原 Carbon 负载下放 `4H Extra`，Carbon 留守架构、`paper/essay/copywriting`、`math/algorithm` 复核；
+   - `carbon_peak` (`-HostModel carbon`)：Carbon 保持主力，仅大量机械/扫描/样板任务（`bulk/boilerplate/scan/test_gen`）自动分流至 `4H` **`high`** 档提速；
+   - `hydrogen_max` (`-HostModel hydrogen`)：Gemini 侧 100% 由 `4H` 执行（推理/编码 `xhigh`、机械 `high`），仅 `paper/essay/copywriting/architecture` 或 `-AllowEscalation` 触发 `final_reviewer = gemini-4-carbon` 终审。
+3. **Antigravity 共享池认知 & 单点 Swarm `gatekeeper`**：
+   - **Gemini 共享池**：`Carbon` 与 `4H` 同属 Antigravity Gemini 池，分流 `4H` 主要换取 **2.5 倍吞吐速度与低延迟**；**Claude 独立稀缺池**：`Opus 5.5` 只审截图 Aesthetic Gate 或 ≤ 800 字终裁，严禁主写或整池开 Worker；**Codex 外部池**：`GPT-6.2 Astra` 走独立 Codex + Cockpit 自动切号，不耗 Antigravity 配额；
+   - `/swarm` 中通过 **1 名单点 `gatekeeper`（`rigor-gate`）** 集中调 `gpt-6.2-astra`（≤1~2 路防 Cockpit 抢锁）与 `claude-opus-5-5`。
+4. **Context & KV Prefix Cache Protocol**：
+   - **静态包前置**：多文件任务先用 `4H High` 生成 `<scratch>/context_pack.md`，调用 `invoke-model.ps1` 时传 `-ContextFiles` 将其固定置顶于 `=====TASK_INSTRUCTIONS=====` 之前，吃满前缀 KV 缓存；
+   - **默认静默 stdout 与遥测**：`invoke-model.ps1` 默认静默不打印中间流 JSON（完整事件写 `$HOME\.cowork\live\<id>.events.jsonl`，7 天清理；仅排障加 `-StreamStdout`），并在 `usage` / `usage.jsonl` 采集 `cached_tokens` 与 `cache_hit_rate`；
+   - **`-Resume` 边界、Swarm 复用与日志节流**：窄域同会话续问用 `-Resume`，独立 Verifier / 切号后开新会话 + `-ContextFiles`；Swarm 同探索前缀用 `fork` 吃热缓存，可复用 Worker 留 `waiting`（0 耗），按 `#seq` 与单向 `@peer` 隔离看板；长测试输出写日志只摘 `<= 20` 行入主对话。
 
 ## 安装、自选默认模型与性能评估（Windows PowerShell）
 
@@ -90,7 +122,7 @@ cowork/
    ```powershell
    git clone https://github.com/daidai1215/cowork.git "$HOME\.gemini\config\skills\cowork"
    ```
-2. 运行安装引导器 `setup.ps1`（自动创建 `~/.codex/skills/cowork` Junction、扫描本机 `agy` + `Codex` 全部可用模型、让你自选默认主力阵容，并在选定后自动评估各模型性能、重绑 `best-*` 别名与同步文档）：
+2. 运行安装引导器 `setup.ps1`（自动创建 `~/.codex/skills/cowork` Junction、部署 `~/.gemini/config/plugins/cowork-orchestrator/` 全局规则插件、扫描本机 `agy` + `Codex` 全部可用模型、让你自选默认主力阵容，并在选定后自动评估各模型性能、重绑 `best-*` 别名与同步文档；若暂不安装全局插件可加 `-SkipGlobalPlugin`）：
    - **交互式菜单自选**：
      ```powershell
      powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\.gemini\config\skills\cowork\scripts\setup.ps1" -Interactive

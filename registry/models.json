@@ -183,6 +183,53 @@
                                       "review_caps":  [
                                                           "code_rigor"
                                                       ]
+                                  },
+                 "bulk":  {
+                              "caps":  [
+                                           "agentic_coding",
+                                           "long_context"
+                                       ],
+                              "review_caps":  [
+                                                  "code_rigor"
+                                              ]
+                          },
+                 "boilerplate":  {
+                                     "caps":  [
+                                                  "agentic_coding"
+                                              ],
+                                     "review_caps":  [
+                                                         "code_rigor"
+                                                     ]
+                                 },
+                 "scan":  {
+                              "caps":  [
+                                           "long_context",
+                                           "agentic_coding"
+                                       ],
+                              "review_caps":  [
+                                                  "world_knowledge"
+                                              ]
+                          },
+                 "test_gen":  {
+                                  "caps":  [
+                                               "agentic_coding",
+                                               "code_rigor"
+                                           ],
+                                  "review_caps":  [
+                                                      "code_rigor"
+                                                  ]
+                              },
+                 "architecture":  {
+                                      "caps":  [
+                                                   "code_rigor",
+                                                   "backend",
+                                                   "long_context"
+                                               ],
+                                      "review_caps":  [
+                                                          "code_rigor",
+                                                          "long_context"
+                                                      ],
+                                      "min_cap":  8.5
                                   }
              },
     "hard_rules":  [
@@ -260,7 +307,19 @@
                   "fast_4h":  {
                                   "lambda_q":  0,
                                   "lambda_s":  0.2
-                              }
+                              },
+                  "orchestrator_fast":  {
+                                            "lambda_q":  0.0,
+                                            "lambda_s":  0.2
+                                        },
+                  "carbon_peak":  {
+                                      "lambda_q":  0.0,
+                                      "lambda_s":  0.0
+                                  },
+                  "hydrogen_max":  {
+                                       "lambda_q":  0.0,
+                                       "lambda_s":  0.25
+                                   }
               },
     "policy":  {
                    "scan_interval_hours":  24,
@@ -303,18 +362,47 @@
                                               "retain_primary_tags":  [
                                                                           "paper",
                                                                           "essay",
-                                                                          "copywriting"
+                                                                          "copywriting",
+                                                                          "architecture"
                                                                       ],
                                               "retain_reviewer_tags":  [
                                                                            "math",
-                                                                           "algorithm"
+                                                                           "algorithm",
+                                                                           "architecture"
                                                                        ],
                                               "retain_polisher_tags":  [
                                                                            "paper",
                                                                            "essay",
                                                                            "copywriting"
                                                                        ]
-                                          }
+                                          },
+                   "host_mode_map":  {
+                                         "orchestrator":  "orchestrator_fast",
+                                         "carbon":  "carbon_peak",
+                                         "hydrogen":  "hydrogen_max"
+                                     },
+                   "mechanical_fast_tags":  [
+                                                "bulk",
+                                                "boilerplate",
+                                                "scan",
+                                                "test_gen"
+                                            ],
+                   "carbon_peak_offload_tags":  [
+                                                    "bulk",
+                                                    "boilerplate",
+                                                    "scan",
+                                                    "test_gen"
+                                                ],
+                   "hydrogen_max_policy":  {
+                                               "from_model":  "gemini-4-carbon",
+                                               "to_model":  "gemini-4-hydrogen",
+                                               "final_review_triggers":  [
+                                                                             "paper",
+                                                                             "essay",
+                                                                             "copywriting",
+                                                                             "architecture"
+                                                                         ]
+                                           }
                },
     "models":  [
                    {
@@ -1195,6 +1283,6 @@
                     "best-knowledge":  "gemini-4-carbon",
                     "best-aesthetic":  "claude-opus-5-5"
                 },
-    "registry_rev":  7,
-    "updated":  "2026-11-18T08:40:00.0000000Z"
+    "registry_rev":  8,
+    "updated":  "2026-11-18T10:30:00.0000000Z"
 }

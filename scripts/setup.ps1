@@ -20,6 +20,8 @@ param(
     [string]$DefaultEffort = 'high',
     [switch]$SkipJunction,
     [string]$CodexDestination = (Join-Path $HOME '.codex\skills\cowork'),
+    [switch]$SkipGlobalPlugin,
+    [string]$GlobalPluginDestination = (Join-Path $HOME '.gemini\config\plugins\cowork-orchestrator'),
     [string]$AgyListFile,
     [string]$CodexCatalogFile,
     [switch]$NoNetwork,
@@ -36,6 +38,34 @@ function Normalize-ModelToken {
     param([string]$Text)
     if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
     return (($Text.Trim().ToLowerInvariant()) -replace '[-._\s]+', '')
+}
+
+function Copy-FileAtomic {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+    $destFull = [IO.Path]::GetFullPath($Destination)
+    $destDir = [IO.Path]::GetDirectoryName($destFull)
+    [void][IO.Directory]::CreateDirectory($destDir)
+    $tmpPath = Join-Path $destDir (
+        '.' + [IO.Path]::GetFileName($destFull) + '.' +
+        [Guid]::NewGuid().ToString('N') + '.tmp'
+    )
+    try {
+        [IO.File]::Copy($Source, $tmpPath, $true)
+        if ([IO.File]::Exists($destFull)) {
+            [IO.File]::Replace($tmpPath, $destFull, [NullString]::Value)
+        }
+        else {
+            [IO.File]::Move($tmpPath, $destFull)
+        }
+    }
+    finally {
+        if ([IO.File]::Exists($tmpPath)) {
+            try { [IO.File]::Delete($tmpPath) } catch {}
+        }
+    }
 }
 
 function Format-DisplayTitle {
@@ -563,6 +593,23 @@ try {
     $canonicalReg = [IO.Path]::GetFullPath((Join-Path $paths.Root 'registry\models.json'))
     $isCanonicalRepo = ([IO.Path]::GetFullPath($paths.Registry) -ieq $canonicalReg)
     $docRoot = if ($isCanonicalRepo) { $paths.Root } else { Split-Path -Parent $paths.RegistryDir }
+    $explicitSkipPlugin = $PSBoundParameters.ContainsKey('SkipGlobalPlugin')
+    $explicitPluginDest = $PSBoundParameters.ContainsKey('GlobalPluginDestination')
+    $envSkipPlugin = ([Environment]::GetEnvironmentVariable('COWORK_SKIP_GLOBAL_PLUGIN') -eq '1')
+    $canonicalStateDir = [IO.Path]::GetFullPath((Join-Path $HOME '.cowork'))
+    $isNonDefaultRegistry = (-not [string]::IsNullOrWhiteSpace($RegistryPath)) -and (-not $isCanonicalRepo)
+    $isNonDefaultState = (-not [string]::IsNullOrWhiteSpace($StateDir)) -and ([IO.Path]::GetFullPath($StateDir) -ine $canonicalStateDir)
+    $hasNonDefaultTarget = $isNonDefaultRegistry -or $isNonDefaultState
+    $effectiveSkipGlobalPlugin = $false
+    if ($SkipGlobalPlugin) {
+        $effectiveSkipGlobalPlugin = $true
+    }
+    elseif ($envSkipPlugin -and -not ($explicitSkipPlugin -and -not [bool]$SkipGlobalPlugin)) {
+        $effectiveSkipGlobalPlugin = $true
+    }
+    elseif ($hasNonDefaultTarget -and -not $explicitSkipPlugin -and -not $explicitPluginDest) {
+        $effectiveSkipGlobalPlugin = $true
+    }
 
     $initialRegistry = Read-Registry -Paths $paths
     $catalogResult = Get-DiscoveredCatalog -Registry $initialRegistry -AgyFile $AgyListFile -CodexFile $CodexCatalogFile -Offline ([bool]$NoNetwork) -WorkRoot $paths.Root
@@ -713,6 +760,8 @@ try {
             planned_evaluations = [string[]]$plannedEvalIds.ToArray()
             skip_junction = [bool]$SkipJunction
             codex_destination = $CodexDestination
+            skip_global_plugin = [bool]$effectiveSkipGlobalPlugin
+            global_plugin_destination = $GlobalPluginDestination
         })
         exit 0
     }
@@ -724,6 +773,25 @@ try {
         if ([IO.File]::Exists($syncCodexScript)) {
             $jRun = Invoke-ChildScriptJson -ScriptPath $syncCodexScript -Arguments @('-Destination', $CodexDestination) -WorkDir $paths.Root -TimeoutSec 30
             $junctionSynced = ($jRun.exit_code -eq 0)
+        }
+    }
+
+    # Step 1b: Sync always-active cowork-orchestrator global plugin if present and not skipped
+    $globalPluginSynced = $false
+    if (-not $effectiveSkipGlobalPlugin -and -not [string]::IsNullOrWhiteSpace($GlobalPluginDestination)) {
+        $pluginSrcRoot = Join-Path $docRoot 'integrations\cowork-orchestrator-plugin'
+        if (-not [IO.File]::Exists((Join-Path $pluginSrcRoot 'plugin.json')) -and $docRoot -ne $paths.Root) {
+            $pluginSrcRoot = Join-Path $paths.Root 'integrations\cowork-orchestrator-plugin'
+        }
+        $srcPluginJson = Join-Path $pluginSrcRoot 'plugin.json'
+        if ([IO.File]::Exists($srcPluginJson)) {
+            $destPluginRoot = [IO.Path]::GetFullPath($GlobalPluginDestination)
+            Copy-FileAtomic -Source $srcPluginJson -Destination (Join-Path $destPluginRoot 'plugin.json')
+            $srcAgentsMd = Join-Path $pluginSrcRoot 'rules\AGENTS.md'
+            if ([IO.File]::Exists($srcAgentsMd)) {
+                Copy-FileAtomic -Source $srcAgentsMd -Destination (Join-Path $destPluginRoot 'rules\AGENTS.md')
+            }
+            $globalPluginSynced = $true
         }
     }
 
@@ -1128,6 +1196,7 @@ try {
         evaluate_mode = $Evaluate
         evaluations = $evaluationResults.ToArray()
         junction_synced = [bool]$junctionSynced
+        global_plugin_synced = [bool]$globalPluginSynced
         docs_synced = [bool]$docsSynced
         doctor_healthy = $(if ($null -ne $docCheck.json) { [bool](Get-OrchestraProperty $docCheck.json 'healthy' $false) } else { $false })
         backup = $backupRelPath

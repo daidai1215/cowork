@@ -1,5 +1,12 @@
 # Cowork changelog
 
+## 2026-11-18T10:30:00.0000000Z - Host-aware three-tier routing (`orchestrator_fast`, `carbon_peak`, `hydrogen_max`), mechanical `high` tier, and `final_reviewer` gate
+- registry_rev: 7 -> 8
+- added tags: `bulk`, `boilerplate`, `scan`, `test_gen`, and `architecture` (`min_cap=8.5`)
+- added host-aware modes `orchestrator_fast` (`lambda_q=0.0, lambda_s=0.2`), `carbon_peak` (`lambda_q=0.0, lambda_s=0.0`), and `hydrogen_max` (`lambda_q=0.0, lambda_s=0.25`)
+- added `policy.host_mode_map`, `policy.mechanical_fast_tags`, `policy.carbon_peak_offload_tags`, `policy.hydrogen_max_policy` (`final_review_triggers=["paper","essay","copywriting","architecture"]`), and added `architecture` to `fast_workhorse_map` retention tags
+- backup: registry/history/models-20261118-183000-7-pre8.json
+
 ## 2026-11-18T08:40:00.0000000Z - Upgrade gpt-6-astra -> gpt-6.2-astra, add gemini-4-hydrogen (4H Extra / fast_4h tier), and Swarm cowork bridge
 - registry_rev: 6 -> 7
 - replaced `gpt-6-astra` (`retired`) with evaluated `gpt-6.2-astra` (`active`, `high` / peak `xhigh`, `aliases` rebound: `best-rigor`, `best-math`, `best-image`)

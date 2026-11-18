@@ -11,12 +11,19 @@
 
 ## 0. 通用铁律（所有模式都适用）
 
-1. **极致性能优先 + 4H Extra 快速分级 + Opus 5.5 严格不解禁主写**
-   - 默认启用 `peak` 模式（$\lambda_q=0,\ \lambda_s=0$），`GPT-6.2 Astra` 与 `Gemini 4 Carbon` 纯按能力上限竞争主写；常规工程与排错跑极速高质量 `high` 档，命中硬核数学（`math`）或带 `-AllowEscalation` 升级重试时，Astra 自动拉满至 **`xhigh` 档**。
-   - **4H Extra 快速分级（`-Mode fast_4h` / `-Fast4H`）**：当用户要求用 **Gemini 4H Extra (`gemini-4-hydrogen-xhigh`)** 快速使用时，将原属 `Carbon` 的前端起草、大仓库预读/检索/重构、日常文档以及常规后端/Bug 审查与竞标副笔下放至 `4H Extra`（速度约 2.5 倍且工具调用幻觉率低）；仅少数高要求关卡保留 `Carbon`（`paper` / `essay` / `copywriting`、高难 `math` / `algorithm` 复核、以及 `-AllowEscalation` 升级任务），`GPT-6.2 Astra` 继续稳守后端/数学/疑难 Bug/生图/Office 主攻。
-   - **`claude-opus-5-5` 锁定 `primary_disabled=true`**：严禁让 Opus 承担大段代码/长文初稿或主写 fallback（无论普通模式还是 `/swarm` 模式）；Opus 始终保持 `high` 档，专职前端/视觉 Aesthetic Gate、文案质感把关，以及双旗舰竞标难分高下时的精简方案终裁（输入 ≤ 800 字或截图 + tokens）。
+1. **规划期双开 + 三档主控感知路由 + Antigravity 多池隔离**
+   - **Orchestrator 规划期默认双开（`/swarm` + `/cowork`）**：当主控处于 `Orchestrator (Carbon)` 或 `Orchestrator (Argon)` 时，**即便在只读规划 / 勘察 / 架构拆解阶段，也默认开启 `/swarm`（`native_swarm`）并行派出只读 `4H` 勘察员，并经 `/cowork` 异步咨询 `GPT-6.2 Astra`**，加速立项、彻底避免单线程 Carbon 慢速阻塞；创建 Worker 时必须显式指定模型：**编码/勘察/测试工指定 `model: "gemini-4-hydrogen-xhigh"`，监控与机械扫描工指定 `model: "gemini-4-hydrogen-high"`**，严禁直接继承 `Orchestrator` 双跳税。
+   - **三档主控感知自动分层（`route.ps1 -HostModel orchestrator|carbon|hydrogen`）**：
+     - `orchestrator_fast`（`-HostModel orchestrator`）：约 80%+ 原 Carbon 负载下放 `4H Extra`（`gemini-4-hydrogen`），Carbon 仅留守 `architecture`、`paper`/`essay`/`copywriting`、`math`/`algorithm` 复核与 `-AllowEscalation` 升级。
+     - `carbon_peak`（`-HostModel carbon`）：Carbon 保留主力权限，仅将大量简单/机械任务（`bulk` / `boilerplate` / `scan` / `test_gen`，未传 `-AllowEscalation`）分流给 `4H` **`high`** 档提速，其余全归 Carbon。
+     - `hydrogen_max`（`-HostModel hydrogen`）：Gemini 侧 100% 由 `4H` 执行（日常 `xhigh`、机械 `high`），仅当 `-AllowEscalation` 或命中 `paper`/`essay`/`copywriting`/`architecture` 时才设置 `orchestration.final_reviewer = "gemini-4-carbon"` 终审。
+     - **4H 机械降档**：`4H` 在普通/推理任务运行 `xhigh`（4H Extra），命中 `mechanical_fast_tags`（`bulk` / `boilerplate` / `scan` / `test_gen`）且未升级时自动降为极速 **`high`** 档。
+   - **平时默认 `peak` 与 Antigravity 共享池认知（Shared-Pool Insight）**：
+     - **Gemini 共享池**：在 Antigravity 内 `Gemini 4 Carbon` 与 `Gemini 4 Hydrogen (4H/4H Extra)` **共享 Gemini 配额池**，但 `4H` 响应快约 2.5 倍且机械 `high` 档更省延迟，因此分流 `4H` 的核心收益在于**并发吞吐提速与避免长等待阻塞**，同时把 Carbon 精准留给高文笔/强世界知识/架构把关。
+     - **Claude 独立稀缺池（`claude-opus-5-5` 锁定 `primary_disabled=true`）**：Opus 独占稀缺 Claude 池，严禁主写或开整池 Opus Worker；始终保持 `high` 档，专职前端/视觉 Aesthetic Gate、文案质感把关，以及双旗舰竞标难分高下时的精简方案终裁（输入 ≤ 800 字或截图 + tokens）。
+     - **Codex 外部池（`gpt-6.2-astra`）**：完全不消耗 Antigravity 额度，由本机 Codex + **Cockpit 自动轮换 `auth.json`** 驱动，全部主控模式下均经 `cowork` 直通承担后端/并发/数学/疑难 Bug/生图/Office；并发控制在 **1~2 路**以防多路踩踏切号窗口。
 2. **先只读勘察立项，后分片动笔（Read-Only Recon Gate）**
-   - 复杂任务严禁边看边改。动笔前必须通过只读通道（`-Access read`，优先用 Carbon 1M 上下文扫全局，硬核接口叠 Astra 复核）生成自包含的 `<scratch>/plan_contract.md`：
+   - 复杂任务严禁边看边改。动笔前先用 `4H High`（`-Tags scan`）或只读通道（`-Access read`）汇总仓库骨架至 `<scratch>/context_pack.md`，必要时叠加 Carbon / Astra 复核，签发自包含 `<scratch>/plan_contract.md`：
      - **目标与非目标**；
      - **文件所有权边界**：`AllowedPrefixes`（允许写入）与 `ForbiddenPrefixes`（禁止触碰）；
      - **不变量、接口签名与已知陷阱（Invariants & Pitfalls）**；
@@ -151,21 +158,38 @@
 
 ## 8. Swarm + Cowork 联合协同协议（`/swarm` 下调用 Opus 5.5 与 GPT-6.2 Astra）
 
-在 Antigravity 开启 `/swarm`（`native_swarm`）后：
+在 Antigravity 开启 `/swarm`（`native_swarm`）后（Orchestrator 模式下即便在只读规划期也应默认双开 `/swarm` + `/cowork`）：
 - **为什么必须通过 `cowork` 桥接**？
   1. 原生 `swarm{action:"add"}` 只能选择 Antigravity 通道模型（`Carbon / 4H Extra / Opus`），**无法直接拉起 Codex 通道的 `gpt-6.2-astra`**；
-  2. 为保护稀缺额度，不应开一整池 `Opus 5.5` Worker 并行耗额度；而是仅在 UI Aesthetic Gate 或双方案难分高下时，通过 `cowork` 单次精简调用 `claude-opus-5-5`。
-  3. 当用户处于 **4H Extra 快速模式** 开启 `/swarm` 时，大量分片编码/测试由 4H Extra Worker 并行推进，需要极高文笔或复杂复核时同样经 `cowork` 调 `gemini-4-carbon`。
+  2. `Opus 5.5` 独占稀缺 Claude 配额池，不应开一整池 `Opus 5.5` Worker 并行耗额度；而是仅在 UI Aesthetic Gate 或双方案难分高下时，通过 `cowork` 单次精简调用 `claude-opus-5-5`。
+  3. 当主控处于 **`Orchestrator`** 或 **4H Extra (`hydrogen_max` / `fast_4h`)** 模式开启 `/swarm` 时，大量分片编码/测试由显式指定 `4H` 的 Worker 并行推进，需要高阶文笔、架构终审或复杂复核时经 `cowork` 调 `gemini-4-carbon`。
 
-### 推荐架构（避免多 Worker 并发撞 Cockpit 切号）
-1. **主力编码与测试池**：`2~5` 个 **4H Extra (`gemini-4-hydrogen-xhigh`)** 或 **Carbon** 原生 Swarm Worker，各自绑定互不重叠的 `workspace:"share"` 与文件前缀，负责快速分片开发与实跑测试。
-2. **专职异构门禁工（`rigor-gate` / `cowork-bridge`，推荐 1 名，留 `inherit`）**：
-   - 运行在 4H/Carbon 上，**专门充当 Swarm 内的 `cowork` 统一网关**；
-   - 需要 **GPT-6.2 Astra**（硬核算法/并发/疑难 Bug/生图/Office/核心 Diff 严审）时，在 Worker 内通过 `run_command`（若工具声明有 `BypassSandbox` 参数则传 `true`）调 `invoke-model.ps1 -Model gpt-6.2-astra -StatusFile "$HOME\.cowork\live\swarm-rigor.json"`，并发控制在 **≤ 1~2 路**，彻底避免多个 Worker 同时把 Cockpit 账号池打穿或相互抢换 `auth.json`；
-   - 需要 **Claude Opus 5.5**（多视口截图审美把关或 Best-of-2 ≤ 800 字终裁）时，调用 `invoke-model.ps1 -Model claude-opus-5-5 -StatusFile "$HOME\.cowork\live\swarm-opus.json"`，并将回执结论以 `#seq` 编号贴回看板或直接 `@` 下一步负责的作者（遵循 `native_swarm` 的按需 `@mention` 规则，不无故 `@all`）。
+### 推荐架构（单点 Gatekeeper + 显式定型防双跳税）
+1. **主力勘察、编码与测试池（显式指定 4H 模型）**：`2~5` 个原生 Swarm Worker，各自绑定互不重叠的 `workspace:"share"` 与文件前缀；**编码/勘察/测试工显式传 `model: "gemini-4-hydrogen-xhigh"`，监控（`monitor`）与机械扫描工显式传 `model: "gemini-4-hydrogen-high"`**，绝不让 Worker 继承 `Orchestrator` 导致双跳延迟与额外消耗。
+2. **单点异构门禁工（`gatekeeper` / `rigor-gate`，推荐 1 名，留 `inherit` 或 `4H`）**：
+   - **专门充当 Swarm 内的 `cowork` 统一单点网关**，集中打包 `<scratch>/context_pack.md` 并受控发起外部旗舰调用；
+   - 需要 **GPT-6.2 Astra**（硬核算法/并发/疑难 Bug/生图/Office/核心 Diff 严审）时，在 `gatekeeper` 内通过 `run_command`（若工具声明有 `BypassSandbox` 参数则传 `true`）调 `invoke-model.ps1 -Model gpt-6.2-astra -ContextFiles ... -StatusFile "$HOME\.cowork\live\swarm-gatekeeper.json"`，并发控制在 **≤ 1~2 路**，彻底避免多个 Worker 同时踩踏 Cockpit 账号池或相互抢换 `auth.json`；
+   - 需要 **Claude Opus 5.5**（多视口截图审美把关或 Best-of-2 ≤ 800 字终裁）时，调用 `invoke-model.ps1 -Model claude-opus-5-5 -StatusFile "$HOME\.cowork\live\swarm-opus.json"`，并将精简回执以 `#seq` 编号贴回看板或直接 `@` 下一步负责的作者（仅 `@` 下一位 peer，无阻塞不 `@coordinator` 或 `@all`）。
 3. **Worker 直接按需调用时的硬约束**（若由普通分片 Worker 直接触发 `cowork`）：
    - Coordinator 必须在创建 Worker 的 `brief` 中内联以下**模板 F**（因为新 Swarm Worker 对主对话与技能上下文天然零记忆）；
-   - 每次调用**必须传唯一 `-StatusFile`**（如 `swarm-<worker名>.json`；若工具声明有 `BypassSandbox` 则传 `true`），不得多个 Worker 共读默认 `latest-codex.json`。
+   - 每次调用**必须传唯一 `-StatusFile`**（如 `swarm-<worker名>.json`；若工具声明有 `BypassSandbox` 则传 `true`），使用默认静默事件流并尽量配合 `-ContextFiles`。
+
+---
+
+## 9. Context & KV Prefix Cache Protocol（上下文与 KV 前缀缓存协议）
+
+1. **多文件先做静态压缩包（`<scratch>/context_pack.md`）**：跨多文件工作先派 `4H High`（`-Tags scan`）只读提取目录骨架、关键符号签名、契约与不变量写入 `<scratch>/context_pack.md`，禁止反复把完整长文件原文硬塞进每轮 prompt。
+2. **`-ContextFiles` 静态前缀置顶锁缓存**：调用 `invoke-model.ps1` 时将静态参考文件传给 `-ContextFiles "<scratch>/context_pack.md,..."`（支持数组或逗号分隔相对路径）。脚本会自动剥离 BOM、统一 `\n` 换行并按确定顺序固定拼接在提示词**最顶部**（`=====CONTEXT_PACK: <filename>===== ... =====END_CONTEXT_PACK=====`），其后才接 `=====TASK_INSTRUCTIONS=====` 与动态 `$Prompt`（Codex 通道自动通过 `--add-dir` 挂载父目录）。保证静态包只增不改即可持续命中底层 KV 前缀缓存（Astra `$0.40/M` 缓存定价 / agy 前缀复用）。
+3. **默认静默 stdout 与 `.events.jsonl` 持久化**：`invoke-model.ps1` 默认静默吞掉中间流式 JSON 行（`stdout` 仅输出末行 1 条 `orchestra_result` 汇总 JSON），彻底杜绝海量流事件撑爆主控上下文；完整原始事件统一落盘至 `$HOME\.cowork\live\<invocation_id>.events.jsonl`（返回 `events_file`，超 7 天自动清理）。仅在现场排障时显式加 `-StreamStdout`。
+4. **`cached_tokens` 缓存命中遥测**：`invoke-model.ps1` 在 `$finalResult.usage` 与 `usage.jsonl` 中统一回填 `input_tokens`、`output_tokens`、`thinking_tokens`、`cached_tokens`（映射 `agy` `cache_read_tokens` 与 `codex` `cached_input_tokens`）、`total_tokens` 与 `cache_hit_rate`。若连续调用 `cache_hit_rate` 异常偏低，优先核查 `-ContextFiles` 文件列表顺序或顶部是否混入动态时间戳。
+5. **`-Resume` 与 `-ContextFiles` 选型边界**：
+   - **用 `-Resume <sid>`**：同一模型/账号内的轻量连续追问（上下文增量极小，且未触发 Cockpit 切号 `resume_invalidated=true`）。
+   - **用新会话 + `-ContextFiles`（不传 `-Resume`）**：独立 Active Verifier 严审、多路分片并行、发生 Cockpit 切号失效（`resume_invalidated=true`）或阶段变更之后——确定性静态前缀同样能吃满 KV 缓存，且彻底隔离旧会话推理锁与历史试错噪声。
+6. **Swarm `fork` 热缓存、`waiting` 复用与 `#channel` 隔离**：
+   - **`fork` 热缓存**：仅当新 Worker 需复用现有成员（或 `coordinator`）已读完的同一大型探索前缀以直吃 KV 热缓存时使用 `fork: "<member>"`；常规互斥分片优先冷启动配合 `<scratch>/context_pack.md`，避免把无关闲聊带入子上下文。
+   - **`waiting` 保活复用**：可复用的作者/审查 Worker 任务告一段落后保持 `waiting`（等待状态 0 token 消耗并保留热上下文），待验收返修再 `@` 唤醒；仅在分片彻底合并收尾后才 `kill`（`kill` 会永久销毁其工作区）。
+   - **`#channel` / 看板隔离**：看板正文保持极简，用 `#seq` 引用历史消息、仅 `@` 下一步负责的 peer；长分析报告与日志写入 `<scratch>/` 或各自文件，不刷屏共享看板。
+7. **长测试与命令输出节流（Output Log Throttling）**：运行大批量单测、构建或扫描时，将完整日志重定向到 `<scratch>/*.log`（外部调用依赖 `.events.jsonl`），**仅摘取 `<= 20` 行**核心结论（退出码、通过/失败计数、首个错误断言）进入主对话或看板。
 
 ---
 
@@ -257,10 +281,10 @@ impact: <受影响的步骤>
 ### F. `/swarm` Worker 调用 `cowork` 桥接内联指令（写入 `swarm{action:"add", brief:...}`）
 ```text
 【Swarm + Cowork 异构桥接授权】
-当你负责的分片遇到以下场景时，禁止在本地模型硬猜或越权开原生 Opus 池，请通过 cowork 脚本调用外部旗舰（仅当 run_command 声明含 BypassSandbox 时传 true；无此字段直接运行）：
-1. 调用 GPT-6.2 Astra（硬核算法/后端/疑难Bug/严审，先读或打包契约再执行，请使用纯文本交付避免内部 shell 卡死）：
-   powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\.gemini\config\skills\cowork\scripts\invoke-model.ps1" -Model gpt-6.2-astra -Access read -Tags "<tags>" -PromptFile "<prompt.md>" -OutFile "<astra_out.md>" -StatusFile "$HOME\.cowork\live\swarm-<worker>.json"
-   若输出含 =====FILE: ...=====，用 extract-files.ps1 -AllowedPrefixes "<你的分片>" 落盘并实跑测试。
+当你负责的分片遇到以下场景时，禁止在本地模型硬猜或越权开原生 Opus 池，请通过 cowork 脚本调用外部旗舰（仅当 run_command 声明含 BypassSandbox 时传 true；无此字段直接运行；默认静默输出仅返回 1 行汇总 JSON，勿传 -StreamStdout）：
+1. 调用 GPT-6.2 Astra（硬核算法/后端/疑难Bug/严审，先读或通过 -ContextFiles 挂载 <scratch>/context_pack.md 与 plan_contract.md，纯文本交付避免内部 shell 卡死）：
+   powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\.gemini\config\skills\cowork\scripts\invoke-model.ps1" -Model gpt-6.2-astra -Access read -Tags "<tags>" -ContextFiles "<scratch>/context_pack.md" -PromptFile "<prompt.md>" -OutFile "<astra_out.md>" -StatusFile "$HOME\.cowork\live\swarm-<worker>.json"
+   若输出含 =====FILE: ...=====，用 extract-files.ps1 -AllowedPrefixes "<你的分片>" 落盘并实跑测试；长测试日志写入文件仅摘 <=20 行贴入看板。
 2. 调用 Claude Opus 5.5（仅限 UI 截图/tokens 审美把关或 ≤800 字双方案架构终裁，严禁派长代码初稿）：
    powershell -NoProfile -ExecutionPolicy Bypass -File "$HOME\.gemini\config\skills\cowork\scripts\invoke-model.ps1" -Model claude-opus-5-5 -Access read -Tags "frontend,ui" -PromptFile "<aesthetic_prompt.md>" -OutFile "<opus_out.md>" -StatusFile "$HOME\.cowork\live\swarm-<worker>-opus.json"
 3. 验收完毕后回填结果：record-outcome.ps1 -SessionId <sid> -Outcome ok|redo|fail；并在看板仅 @ 需衔接的下一位 peer（无阻塞不要 @coordinator 或 @all）。
