@@ -103,6 +103,7 @@ function Get-OrchestraPaths {
         State = Join-Path $stateDirectory 'state.json'
         Usage = Join-Path $stateDirectory 'usage.jsonl'
         Locks = Join-Path $stateDirectory 'locks'
+        Slots = Join-Path $stateDirectory 'slots'
     }
 }
 
@@ -174,7 +175,7 @@ function Invoke-WithLock {
         [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock,
         [int]$TimeoutSec = 10
     )
-    $ranks = @{ registry = 1; state = 2; usage = 3 }
+    $ranks = @{ registry = 1; state = 2; usage = 3; slots = 4 }
     if (-not $ranks.ContainsKey($Name) -or $TimeoutSec -lt 0) {
         throw 'ORCHESTRA_ARGS: Invalid lock name or timeout.'
     }
@@ -184,7 +185,7 @@ function Invoke-WithLock {
     }
     foreach ($held in $script:OrchestraHeldLocks.Values) {
         if ([int]$held -gt [int]$ranks[$Name]) {
-            throw 'ORCHESTRA_LOCK_ORDER: Use registry, state, usage order.'
+            throw 'ORCHESTRA_LOCK_ORDER: Use registry, state, usage, slots order.'
         }
     }
     [void][IO.Directory]::CreateDirectory($Paths.Locks)
@@ -1570,4 +1571,295 @@ function Test-PendingProposalConflict {
         }
     }
     return $false
+}
+
+function Get-OrchestraPoolName {
+    param($Model, [string]$Channel = '')
+    $ch = if (-not [string]::IsNullOrWhiteSpace($Channel)) {
+        $Channel.Trim().ToLowerInvariant()
+    }
+    else {
+        ([string](Get-OrchestraProperty $Model 'channel' '')).Trim().ToLowerInvariant()
+    }
+    $vendor = ([string](Get-OrchestraProperty $Model 'vendor' '')).Trim().ToLowerInvariant()
+    $id = ([string](Get-OrchestraProperty $Model 'id' '')).Trim().ToLowerInvariant()
+    if ($ch -eq 'codex') { return 'codex_openai' }
+    if ($vendor -eq 'anthropic' -or $id -match '^claude-') { return 'agy_anthropic' }
+    return 'agy_google'
+}
+
+function Get-OrchestraPoolLimits {
+    param($Policy = $null)
+    $limits = [ordered]@{
+        codex_openai = 2
+        agy_anthropic = 2
+        agy_google = 6
+    }
+    if ($null -ne $Policy) {
+        $cfg = Get-OrchestraProperty $Policy 'pool_concurrency_limits' $null
+        if ($null -ne $cfg) {
+            foreach ($poolName in @('codex_openai', 'agy_anthropic', 'agy_google')) {
+                $rawVal = Get-OrchestraProperty $cfg $poolName $null
+                if ($null -ne $rawVal) {
+                    $parsed = 0
+                    if ([int]::TryParse([string]$rawVal, [ref]$parsed) -and $parsed -ge 1) {
+                        $limits[$poolName] = $parsed
+                    }
+                }
+            }
+        }
+    }
+    return $limits
+}
+
+function Test-OrchestraPidAlive {
+    param([int]$ProcessId)
+    if ($ProcessId -le 0) { return $false }
+    $fakeRaw = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_FAKE_ALIVE_PIDS')
+    if (-not [string]::IsNullOrWhiteSpace($fakeRaw)) {
+        foreach ($part in ($fakeRaw -split ',')) {
+            $trimmed = $part.Trim()
+            $fakePid = 0
+            if ([int]::TryParse($trimmed, [ref]$fakePid) -and $fakePid -eq $ProcessId) {
+                return $true
+            }
+        }
+    }
+    return ($null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue))
+}
+
+function Get-ActivePoolSlotStatus {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Paths,
+        $Policy = $null,
+        [switch]$CleanupStale
+    )
+    $limits = Get-OrchestraPoolLimits -Policy $Policy
+    $inspect = {
+        $poolNames = @('codex_openai', 'agy_anthropic', 'agy_google')
+        $counts = @{ codex_openai = 0; agy_anthropic = 0; agy_google = 0 }
+        $modelsMap = @{
+            codex_openai = (New-Object 'System.Collections.Generic.List[string]')
+            agy_anthropic = (New-Object 'System.Collections.Generic.List[string]')
+            agy_google = (New-Object 'System.Collections.Generic.List[string]')
+        }
+        $slotsMap = @{
+            codex_openai = (New-Object 'System.Collections.Generic.List[int]')
+            agy_anthropic = (New-Object 'System.Collections.Generic.List[int]')
+            agy_google = (New-Object 'System.Collections.Generic.List[int]')
+        }
+        $reclaimed = 0
+        $staleDetected = 0
+        $slotsDir = [string](Get-OrchestraProperty $Paths 'Slots' '')
+        if (-not [string]::IsNullOrWhiteSpace($slotsDir) -and [IO.Directory]::Exists($slotsDir)) {
+            $now = Get-OrchestraNow
+            $cutoff = $now.AddSeconds(-7200)
+            foreach ($filePath in [IO.Directory]::GetFiles($slotsDir, '*.json')) {
+                $lease = $null
+                $isStale = $false
+                try {
+                    $lease = Read-JsonFile -Path $filePath
+                }
+                catch {
+                    $isStale = $true
+                }
+                if ($null -eq $lease) {
+                    $isStale = $true
+                }
+                else {
+                    $rawPid = Get-OrchestraProperty $lease 'pid' $null
+                    $leasePid = 0
+                    if ($null -eq $rawPid -or -not [int]::TryParse([string]$rawPid, [ref]$leasePid) -or $leasePid -le 0) {
+                        $isStale = $true
+                    }
+                    elseif (-not (Test-OrchestraPidAlive -ProcessId $leasePid)) {
+                        $isStale = $true
+                    }
+                    else {
+                        $startedText = [string](Get-OrchestraProperty $lease 'started_utc' '')
+                        if ([string]::IsNullOrWhiteSpace($startedText)) {
+                            $isStale = $true
+                        }
+                        else {
+                            try {
+                                $startedDt = ConvertTo-OrchestraUtc $startedText
+                                if ($startedDt -lt $cutoff) { $isStale = $true }
+                            }
+                            catch { $isStale = $true }
+                        }
+                    }
+                }
+                if ($isStale) {
+                    $staleDetected++
+                    if ($CleanupStale) {
+                        try {
+                            if ([IO.File]::Exists($filePath)) {
+                                [IO.File]::Delete($filePath)
+                                $reclaimed++
+                            }
+                        }
+                        catch {}
+                    }
+                    continue
+                }
+                $leasePool = [string](Get-OrchestraProperty $lease 'pool' '')
+                if ([string]::IsNullOrWhiteSpace($leasePool)) {
+                    $leasePool = Get-OrchestraPoolName -Model $null -Channel ([string](Get-OrchestraProperty $lease 'channel' ''))
+                }
+                if ($counts.ContainsKey($leasePool)) {
+                    $counts[$leasePool]++
+                    $leaseModel = [string](Get-OrchestraProperty $lease 'model' '')
+                    if (-not [string]::IsNullOrWhiteSpace($leaseModel)) {
+                        [void]$modelsMap[$leasePool].Add($leaseModel)
+                    }
+                    $rawSlot = Get-OrchestraProperty $lease 'slot' $null
+                    $slotNum = 0
+                    if ($null -ne $rawSlot -and [int]::TryParse([string]$rawSlot, [ref]$slotNum) -and $slotNum -ge 1) {
+                        [void]$slotsMap[$leasePool].Add($slotNum)
+                    }
+                }
+            }
+        }
+        $totalActive = 0
+        $poolsOut = [ordered]@{}
+        foreach ($p in $poolNames) {
+            $act = [int]$counts[$p]
+            $lim = [int]$limits[$p]
+            $avail = [int][Math]::Max(0, $lim - $act)
+            $totalActive += $act
+            $poolsOut[$p] = [ordered]@{
+                active = $act
+                limit = $lim
+                available = $avail
+                models = @($modelsMap[$p].ToArray())
+                slots = @($slotsMap[$p].ToArray())
+            }
+        }
+        return [ordered]@{
+            total_active = [int]$totalActive
+            underutilized = ($totalActive -lt 2)
+            pools = $poolsOut
+            reclaimed_stale = [int]$reclaimed
+            stale_detected = [int]$staleDetected
+        }
+    }
+    if ($CleanupStale -and -not (Test-OrchestraLockHeld -Paths $Paths -Name slots)) {
+        $slotsDirCheck = [string](Get-OrchestraProperty $Paths 'Slots' '')
+        if (-not [string]::IsNullOrWhiteSpace($slotsDirCheck) -and [IO.Directory]::Exists($slotsDirCheck)) {
+            return (Invoke-WithLock -Paths $Paths -Name slots -ScriptBlock $inspect)
+        }
+    }
+    return (& $inspect)
+}
+
+function Acquire-OrchestraPoolSlot {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Paths,
+        [Parameter(Mandatory = $true)][string]$Pool,
+        [Parameter(Mandatory = $true)][int]$Limit,
+        [Parameter(Mandatory = $true)][string]$InvocationId,
+        [string]$ModelId = '',
+        [string]$Channel = '',
+        [int]$WaitSec = 300,
+        [switch]$NoWait,
+        [scriptblock]$OnQueued = $null
+    )
+    if ($Pool -notin @('codex_openai', 'agy_anthropic', 'agy_google')) {
+        throw "ORCHESTRA_ARGS: Unknown pool: $Pool"
+    }
+    if ($Limit -lt 1) {
+        throw 'ORCHESTRA_ARGS: Pool limit must be at least 1.'
+    }
+    $slotsDir = [string](Get-OrchestraProperty $Paths 'Slots' '')
+    if ([string]::IsNullOrWhiteSpace($slotsDir)) {
+        throw 'ORCHESTRA_ARGS: Missing Paths.Slots.'
+    }
+    $slotWatch = [Diagnostics.Stopwatch]::StartNew()
+    $notifiedQueued = $false
+    try {
+        while ($true) {
+            $lockTimeout = if ($NoWait -or $WaitSec -le 0) { 1 } else { [Math]::Min(10, $WaitSec) }
+            $acquired = Invoke-WithLock -Paths $Paths -Name slots -TimeoutSec $lockTimeout -ScriptBlock {
+                [void][IO.Directory]::CreateDirectory($slotsDir)
+                $status = Get-ActivePoolSlotStatus -Paths $Paths -CleanupStale
+                $poolInfo = $status.pools[$Pool]
+                if ([int]$poolInfo.active -lt $Limit) {
+                    $takenSlots = @($poolInfo.slots)
+                    $chosenSlot = 0
+                    for ($i = 1; $i -le $Limit; $i++) {
+                        $candPath = Join-Path $slotsDir ("$Pool-$i.json")
+                        if (($takenSlots -notcontains $i) -and -not [IO.File]::Exists($candPath)) {
+                            $chosenSlot = $i
+                            break
+                        }
+                    }
+                    if ($chosenSlot -ge 1) {
+                        $leasePath = Join-Path $slotsDir ("$Pool-$chosenSlot.json")
+                        $leaseObj = [ordered]@{
+                            invocation_id = $InvocationId
+                            pid = [int]$PID
+                            pool = $Pool
+                            slot = [int]$chosenSlot
+                            model = $ModelId
+                            channel = $Channel
+                            started_utc = (Get-OrchestraNow).ToString('o')
+                        }
+                        Write-JsonAtomic -Path $leasePath -Object $leaseObj
+                        return [ordered]@{
+                            lease_path = $leasePath
+                            pool = $Pool
+                            slot = [int]$chosenSlot
+                            waited_sec = [Math]::Round($slotWatch.Elapsed.TotalSeconds, 3)
+                        }
+                    }
+                }
+                return $null
+            }
+            if ($null -ne $acquired) {
+                return $acquired
+            }
+            if ($NoWait -or $WaitSec -le 0 -or $slotWatch.Elapsed.TotalSeconds -ge $WaitSec) {
+                throw "ORCHESTRA_LOCK_TIMEOUT: Pool $Pool is at capacity ($Limit/$Limit)."
+            }
+            if (-not $notifiedQueued) {
+                $notifiedQueued = $true
+                if ($null -ne $OnQueued) {
+                    & $OnQueued
+                }
+            }
+            Start-Sleep -Milliseconds 250
+        }
+    }
+    finally {
+        $slotWatch.Stop()
+    }
+}
+
+function Release-OrchestraPoolSlot {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Paths,
+        [string]$LeasePath,
+        [string]$InvocationId
+    )
+    if ([string]::IsNullOrWhiteSpace($LeasePath) -or [string]::IsNullOrWhiteSpace($InvocationId)) { return }
+    $releaseWork = {
+        if (-not [IO.File]::Exists($LeasePath)) { return }
+        try {
+            $existing = Read-JsonFile -Path $LeasePath
+            if ($null -eq $existing) { return }
+            $ownerId = [string](Get-OrchestraProperty $existing 'invocation_id' '')
+            if (-not [string]::IsNullOrWhiteSpace($ownerId) -and $ownerId -ceq $InvocationId) {
+                [IO.File]::Delete($LeasePath)
+            }
+        }
+        catch {
+            # Leave unreadable/corrupt leases for Get-ActivePoolSlotStatus -CleanupStale rather than deleting blindly.
+        }
+    }
+    if (Test-OrchestraLockHeld -Paths $Paths -Name slots) {
+        & $releaseWork
+    }
+    else {
+        Invoke-WithLock -Paths $Paths -Name slots -ScriptBlock $releaseWork
+    }
 }

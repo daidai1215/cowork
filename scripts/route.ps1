@@ -15,6 +15,8 @@ param(
     [switch]$Fast4H,
     [string[]]$Exclude = @(),
     [switch]$AllowEscalation,
+    [string[]]$BusyAgents = @(),
+    [switch]$PreferIdle,
     [string]$RegistryPath,
     [string]$StateDir
 )
@@ -36,16 +38,160 @@ function Get-RValue {
     return $Default
 }
 
-function Expand-RNames {
-    param([string[]]$Names)
+function Expand-RList {
+    param([string[]]$Items)
     @(
-        foreach ($name in $Names) {
-            foreach ($part in ($name -split ',')) {
+        foreach ($item in $Items) {
+            foreach ($part in ($item -split ',')) {
                 $value = $part.Trim()
                 if ($value.Length -gt 0) { $value }
             }
         }
-    ) | Sort-Object -Unique
+    )
+}
+
+function Expand-RNames {
+    param([string[]]$Names)
+    @(Expand-RList -Items $Names) | Sort-Object -Unique
+}
+
+function Resolve-RPoolName {
+    param($Model, [string]$Channel = '')
+    if (Get-Command Get-OrchestraPoolName -ErrorAction SilentlyContinue) {
+        return [string](Get-OrchestraPoolName -Model $Model -Channel $Channel)
+    }
+    $ch = if (-not [string]::IsNullOrWhiteSpace($Channel)) {
+        $Channel.Trim().ToLowerInvariant()
+    }
+    else {
+        ([string](Get-RValue $Model 'channel' '')).Trim().ToLowerInvariant()
+    }
+    $vendor = ([string](Get-RValue $Model 'vendor' '')).Trim().ToLowerInvariant()
+    $id = ([string](Get-RValue $Model 'id' '')).Trim().ToLowerInvariant()
+    if ($ch -eq 'codex') { return 'codex_openai' }
+    if ($vendor -eq 'anthropic' -or $id -match '^claude-') { return 'agy_anthropic' }
+    return 'agy_google'
+}
+
+function Get-RPoolLoad {
+    param(
+        [hashtable]$Paths,
+        $Policy,
+        $Registry,
+        [string[]]$BusyAgents = @()
+    )
+    $defaultLimits = [ordered]@{ codex_openai = 2; agy_anthropic = 2; agy_google = 6 }
+    $limitsObj = Get-RValue $Policy 'pool_concurrency_limits' $null
+    $limits = [ordered]@{}
+    foreach ($pKey in @('codex_openai', 'agy_anthropic', 'agy_google')) {
+        $rawLim = Get-RValue $limitsObj $pKey $null
+        $limits[$pKey] = if ($null -ne $rawLim -and [int]$rawLim -gt 0) { [int]$rawLim } else { [int]$defaultLimits[$pKey] }
+    }
+
+    $pools = [ordered]@{}
+    $totalActive = 0
+    if (Get-Command Get-ActivePoolSlotStatus -ErrorAction SilentlyContinue) {
+        $rawStatus = Get-ActivePoolSlotStatus -Paths $Paths -Policy $Policy
+        $rawPools = Get-RValue $rawStatus 'pools' $null
+        foreach ($pKey in @('codex_openai', 'agy_anthropic', 'agy_google')) {
+            $rp = Get-RValue $rawPools $pKey $null
+            $lim = if ($null -ne $rp) { [int](Get-RValue $rp 'limit' $limits[$pKey]) } else { [int]$limits[$pKey] }
+            $act = if ($null -ne $rp) { [int](Get-RValue $rp 'active' 0) } else { 0 }
+            $avail = if ($null -ne $rp) { [int](Get-RValue $rp 'available' ([Math]::Max(0, $lim - $act))) } else { [Math]::Max(0, $lim - $act) }
+            $mods = New-Object 'System.Collections.Generic.List[string]'
+            if ($null -ne $rp) {
+                foreach ($m in @(Get-RValue $rp 'models' @())) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$m)) { [void]$mods.Add([string]$m) }
+                }
+            }
+            $pools[$pKey] = [ordered]@{
+                active = $act
+                limit = $lim
+                available = $avail
+                models = $mods
+            }
+            $totalActive += $act
+        }
+    }
+    else {
+        foreach ($pKey in @('codex_openai', 'agy_anthropic', 'agy_google')) {
+            $lim = [int]$limits[$pKey]
+            $pools[$pKey] = [ordered]@{
+                active = 0
+                limit = $lim
+                available = $lim
+                models = (New-Object 'System.Collections.Generic.List[string]')
+            }
+        }
+    }
+
+    foreach ($busy in @(Expand-RList -Items $BusyAgents)) {
+        $lowerBusy = $busy.ToLowerInvariant()
+        $targetPool = $null
+        $modelLabel = $null
+        if ($pools.Contains($lowerBusy)) {
+            $targetPool = $lowerBusy
+        }
+        else {
+            $resolvedBusyId = Resolve-RModel $Registry $busy
+            if (-not [string]::IsNullOrWhiteSpace($resolvedBusyId)) {
+                $busyModel = @(Get-RValue $Registry 'models' @() | Where-Object { [string]$_.id -eq $resolvedBusyId }) | Select-Object -First 1
+                if ($null -ne $busyModel) {
+                    $targetPool = Resolve-RPoolName -Model $busyModel
+                    $modelLabel = $resolvedBusyId
+                }
+            }
+            elseif ($lowerBusy -match '^(gpt-|o\d|codex)') {
+                $targetPool = 'codex_openai'
+                $modelLabel = $busy
+            }
+            elseif ($lowerBusy -match '^claude-') {
+                $targetPool = 'agy_anthropic'
+                $modelLabel = $busy
+            }
+            elseif ($lowerBusy -match '^gemini-') {
+                $targetPool = 'agy_google'
+                $modelLabel = $busy
+            }
+            else {
+                throw "ORCHESTRA_ARGS: Unknown busy agent or pool: $busy"
+            }
+        }
+        if ($null -ne $targetPool -and $pools.Contains($targetPool)) {
+            $entry = $pools[$targetPool]
+            $entry.active = [int]$entry.active + 1
+            $entry.available = [Math]::Max(0, [int]$entry.limit - [int]$entry.active)
+            if (-not [string]::IsNullOrWhiteSpace($modelLabel)) {
+                [void]$entry.models.Add($modelLabel)
+            }
+            $totalActive++
+        }
+    }
+
+    $finalPools = [ordered]@{}
+    foreach ($pKey in @('codex_openai', 'agy_anthropic', 'agy_google')) {
+        $ep = $pools[$pKey]
+        $finalPools[$pKey] = [ordered]@{
+            active = [int]$ep.active
+            limit = [int]$ep.limit
+            available = [int]$ep.available
+            models = @($ep.models.ToArray())
+        }
+    }
+    return [ordered]@{
+        total_active = [int]$totalActive
+        underutilized = ($totalActive -lt 2)
+        pools = $finalPools
+    }
+}
+
+function Test-RPoolAvailable {
+    param($PoolLoad, $Model)
+    if ($null -eq $PoolLoad -or $null -eq $Model) { return $true }
+    $pName = Resolve-RPoolName -Model $Model
+    $pEntry = Get-RValue $PoolLoad.pools $pName $null
+    if ($null -eq $pEntry) { return $true }
+    return ([int]$pEntry.available -gt 0)
 }
 
 function Get-RCap {
@@ -283,6 +429,7 @@ try {
     }
 
     $policy = Get-RValue $registry 'policy'
+    $poolLoad = Get-RPoolLoad -Paths $paths -Policy $policy -Registry $registry -BusyAgents $BusyAgents
     $modesTable = Get-RValue $registry 'modes'
     $hostModeMap = Get-RValue $policy 'host_mode_map' $null
     if ([string]::IsNullOrWhiteSpace($Mode)) {
@@ -619,6 +766,7 @@ try {
     $primary = $primaryPool[0].Model
     $fastTierOffloaded = $false
     $fastWorkhorseModel = $null
+    $fastPrimaryPoolMatch = $null
     $fastFromModel = $null
     $fastFromId = $null
     $fastToId = $null
@@ -700,6 +848,27 @@ try {
                 $fastTierOffloaded = $true
                 [void]$reasons.Add("hydrogen_max tier: offloaded $fastFromId primary task to $fastToId.")
             }
+        }
+    }
+
+    if ($PreferIdle -and -not (Test-RPoolAvailable -PoolLoad $poolLoad -Model $primary)) {
+        $idlePrimaryMatch = @(
+            $primaryPool | Where-Object { Test-RPoolAvailable -PoolLoad $poolLoad -Model $_.Model }
+        ) | Select-Object -First 1
+        if ($null -ne $idlePrimaryMatch -and $idlePrimaryMatch.Id -ne $primary.id) {
+            $primary = $idlePrimaryMatch.Model
+            if (
+                -not $AllowEscalation -and
+                -not [string]::IsNullOrWhiteSpace($fastFromId) -and
+                $primary.id -eq $fastFromId -and
+                $null -ne $fastPrimaryPoolMatch -and
+                (Test-RPoolAvailable -PoolLoad $poolLoad -Model $fastPrimaryPoolMatch.Model) -and
+                (($isFastWorkhorseMode -and -not $retainPrimaryHit) -or $isCarbonPeakOffload -or $isHydrogenMaxMode)
+            ) {
+                $primary = $fastPrimaryPoolMatch.Model
+                $fastTierOffloaded = $true
+            }
+            [void]$reasons.Add("load_balance: shifted primary from saturated pool to idle pool ($($primary.id)).")
         }
     }
 
@@ -814,6 +983,28 @@ try {
                 else {
                     [void]$reasons.Add("hydrogen_max tier: retained $fastFromId reviewer to avoid self-review while $fastToId owns primary.")
                 }
+            }
+        }
+    }
+    if ($null -ne $reviewer -and $null -eq $aestheticRule -and -not $retainReviewerHit -and -not (Test-RPoolAvailable -PoolLoad $poolLoad -Model $reviewer)) {
+        $idleRevCandidates = @(
+            $activeRecords | Where-Object {
+                $_.Id -ne $primary.id -and
+                (Test-RPoolAvailable -PoolLoad $poolLoad -Model $_.Model)
+            }
+        )
+        if ($isHydrogenMaxMode -and -not $AllowEscalation -and -not [string]::IsNullOrWhiteSpace($fastFromId)) {
+            $nonCarbonIdle = @($idleRevCandidates | Where-Object { $_.Id -ne $fastFromId })
+            if ($nonCarbonIdle.Count -gt 0) { $idleRevCandidates = $nonCarbonIdle }
+        }
+        if ($idleRevCandidates.Count -gt 0) {
+            $idleRev = Select-RReviewer `
+                -Candidates $idleRevCandidates -Primary $primary `
+                -Dimensions @($reviewDimensions) -PreferredIds $preferredReviewerIds -Reasons $reasons
+            if ($null -ne $idleRev -and $idleRev.id -ne $reviewer.id) {
+                $oldRevId = [string]$reviewer.id
+                $reviewer = $idleRev
+                [void]$reasons.Add("load_balance: shifted reviewer from saturated pool ($oldRevId) to $($reviewer.id) on idle pool.")
             }
         }
     }
@@ -959,6 +1150,24 @@ try {
                 $coModel = $fastWorkhorseModel
                 $fastTierOffloaded = $true
             }
+            if (-not (Test-RPoolAvailable -PoolLoad $poolLoad -Model $coModel)) {
+                $idleCoCandidates = @($coCandidates | Where-Object { Test-RPoolAvailable -PoolLoad $poolLoad -Model $_.Model })
+                if ($idleCoCandidates.Count -gt 0) {
+                    $coModel = $idleCoCandidates[0].Model
+                    if (
+                        -not $AllowEscalation -and
+                        $null -ne $fastWorkhorseModel -and
+                        $coModel.id -eq $fastFromId -and
+                        $fastWorkhorseModel.vendor -ne $primary.vendor -and
+                        (Test-RPoolAvailable -PoolLoad $poolLoad -Model $fastWorkhorseModel) -and
+                        (($isFastWorkhorseMode -and -not $retainReviewerHit) -or $isCarbonPeakOffload -or $isHydrogenMaxMode)
+                    ) {
+                        $coModel = $fastWorkhorseModel
+                        $fastTierOffloaded = $true
+                    }
+                    [void]$reasons.Add("load_balance: shifted co_drafter to $($coModel.id) on idle pool.")
+                }
+            }
             $coDrafterId = [string]$coModel.id
             $coDrafterEffort = Resolve-REffort `
                 -Model $coModel -ModeName $Mode -TagList @($tagNames) `
@@ -985,6 +1194,116 @@ try {
         }
     }
 
+    $codexAvail = [int]$poolLoad.pools['codex_openai'].available
+    $scaleOutHint = if ([bool]$poolLoad.underutilized) {
+        'underutilized_capacity: activate idle pools concurrently (Astra + Opus + 4H) across disjoint prefixes & TDM micro-slices'
+    }
+    elseif ($codexAvail -le 0) {
+        'codex_pool_saturated: queue TDM <=2 slots or offload non-min_cap slices to 4H Extra'
+    }
+    else {
+        'balanced_multi_pool'
+    }
+
+    $parallelLanes = New-Object 'System.Collections.Generic.List[object]'
+    [void]$parallelLanes.Add([ordered]@{
+        lane = 'critical_primary'
+        role = 'primary_implementation'
+        model = [string]$primary.id
+        pool = (Resolve-RPoolName -Model $primary)
+        timing = 'T0_immediate_LPT'
+        scope = 'primary shard'
+    })
+
+    if (@($tagNames | Where-Object { $_ -in @('frontend', 'ui', 'landing_page') }).Count -gt 0) {
+        $codexLaneMatch = @($activeRecords | Where-Object { $_.Id -eq 'gpt-6.2-astra' -and $_.Id -ne $primary.id }) | Select-Object -First 1
+        if ($null -eq $codexLaneMatch) {
+            $codexLaneMatch = @(
+                $activeRecords |
+                    Where-Object { (Resolve-RPoolName -Model $_.Model) -eq 'codex_openai' -and $_.Id -ne $primary.id } |
+                    Sort-Object @{ Expression = { $_.Score }; Descending = $true }, @{ Expression = { $_.Id }; Descending = $false }
+            ) | Select-Object -First 1
+        }
+        if ($null -ne $codexLaneMatch) {
+            [void]$parallelLanes.Add([ordered]@{
+                lane = 'parallel_codex_contract'
+                role = 'parallel_assets_or_contract'
+                model = [string]$codexLaneMatch.Id
+                pool = 'codex_openai'
+                timing = 'T0_parallel_if_needed'
+                scope = 'assets / backend contract / verification'
+            })
+        }
+
+        $opusLaneModel = $null
+        if ($null -ne $reviewer -and (Resolve-RPoolName -Model $reviewer) -eq 'agy_anthropic') {
+            $opusLaneModel = $reviewer
+        }
+        else {
+            $opusLaneMatch = @($activeRecords | Where-Object { $_.Id -eq 'claude-opus-5-5' }) | Select-Object -First 1
+            if ($null -eq $opusLaneMatch) {
+                $opusLaneMatch = @($activeRecords | Where-Object { (Resolve-RPoolName -Model $_.Model) -eq 'agy_anthropic' }) | Select-Object -First 1
+            }
+            if ($null -ne $opusLaneMatch) { $opusLaneModel = $opusLaneMatch.Model }
+        }
+        if ($null -ne $opusLaneModel) {
+            [void]$parallelLanes.Add([ordered]@{
+                lane = 'aesthetic_gate'
+                role = 'aesthetic_gate_tokens_and_viewport'
+                model = [string]$opusLaneModel.id
+                pool = 'agy_anthropic'
+                timing = 'T1_overlap_slice1_screenshots'
+                scope = '1440/768/390 screenshots + tokens'
+            })
+        }
+    }
+
+    if (@($tagNames | Where-Object { $_ -in @('backend', 'api', 'concurrency', 'bugfix', 'algorithm', 'refactor') }).Count -gt 0) {
+        $googleLaneMatch = @($activeRecords | Where-Object {
+            $_.Id -eq 'gemini-4-hydrogen' -and $_.Id -ne $primary.id -and -not [bool](Get-RValue $_.Model 'primary_disabled' $false)
+        }) | Select-Object -First 1
+        if ($null -eq $googleLaneMatch) {
+            $googleLaneMatch = @(
+                $activeRecords |
+                    Where-Object {
+                        (Resolve-RPoolName -Model $_.Model) -eq 'agy_google' -and
+                        $_.Id -ne $primary.id -and
+                        -not [bool](Get-RValue $_.Model 'primary_disabled' $false)
+                    } |
+                    Sort-Object @{ Expression = { [int]$_.Model.speed_rank }; Descending = $true }, @{ Expression = { $_.Score }; Descending = $true }, @{ Expression = { $_.Id }; Descending = $false }
+            ) | Select-Object -First 1
+        }
+        if ($null -ne $googleLaneMatch) {
+            [void]$parallelLanes.Add([ordered]@{
+                lane = 'parallel_fast_google'
+                role = 'parallel_disjoint_tests_and_recon'
+                model = [string]$googleLaneMatch.Id
+                pool = 'agy_google'
+                timing = 'T0_parallel_disjoint_tests_prefix'
+                scope = 'tests/ & context_pack.md'
+            })
+        }
+        if ($null -ne $reviewer) {
+            $tieBreakMatch = @($activeRecords | Where-Object { $_.Id -eq 'claude-opus-5-5' }) | Select-Object -First 1
+            if ($null -eq $tieBreakMatch) {
+                $tieBreakMatch = @($activeRecords | Where-Object { (Resolve-RPoolName -Model $_.Model) -eq 'agy_anthropic' }) | Select-Object -First 1
+            }
+            $reviewScope = 'delta diff + <=20 test log lines'
+            if ($null -ne $coDrafterId) {
+                $tieHint = if ($null -ne $tieBreakMatch) { "$($tieBreakMatch.Id) <=800w tie-break arbitration" } else { '<=800w tie-break arbitration' }
+                $reviewScope = "$reviewScope; $tieHint"
+            }
+            [void]$parallelLanes.Add([ordered]@{
+                lane = 'micro_slice_review'
+                role = $(if ($null -ne $coDrafterId) { 'delta_review_and_tie_break' } else { 'delta_review' })
+                model = [string]$reviewer.id
+                pool = (Resolve-RPoolName -Model $reviewer)
+                timing = 'T1_micro_slice_TDM_delta_review'
+                scope = $reviewScope
+            })
+        }
+    }
+
     $selectedEntry = ($primaryPool | Where-Object { $_.Id -eq $primary.id } | Select-Object -First 1)
     if ($null -eq $selectedEntry) {
         $selectedEntry = ($records | Where-Object { $_.Id -eq $primary.id } | Select-Object -First 1)
@@ -1004,6 +1323,9 @@ try {
         host_mode = $hostModeOut
         final_reviewer = $finalReviewerId
         final_review_triggers = @($finalReviewTriggersOut)
+        pool_load = $poolLoad
+        scale_out_hint = $scaleOutHint
+        parallel_lanes = @($parallelLanes.ToArray())
     }
 
     [void]$reasons.Add(

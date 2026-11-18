@@ -5,7 +5,7 @@
 ## 当前主力阵容（默认 `peak` 极致性能 / 三档主控感知分层）
 
 <!-- AUTO:ROSTER:START -->
-> 自动同步自 `registry/models.json` (`registry_rev: 8`, 活跃模型: 4)
+> 自动同步自 `registry/models.json` (`registry_rev: 9`, 活跃模型: 4)
 
 | 模型 | ID / 通道 | 默认档位 | 顶级长板（>=9） | 额度 (`quota_rank`) | 速度 (`speed_rank`) | 运行特性 |
 |---|---|---|---|---|---|---|
@@ -16,6 +16,7 @@
 
 - **可用额度排序（低 → 高）**: Claude Opus 5.5 (`claude-opus-5-5`) < GPT-6.2 Astra (`gpt-6.2-astra`) < Gemini 4 Carbon (`gemini-4-carbon`) < Gemini 4 Hydrogen (`gemini-4-hydrogen`)
 - **响应速度排序（快 → 慢）**: Gemini 4 Hydrogen (`gemini-4-hydrogen`) > Claude Opus 5.5 (`claude-opus-5-5`) > Gemini 4 Carbon (`gemini-4-carbon`) > GPT-6.2 Astra (`gpt-6.2-astra`)
+- **通道池并发上限 (`pool_concurrency_limits`)**: `codex_openai` <= 2, `agy_anthropic` <= 2, `agy_google` <= 6
 <!-- AUTO:ROSTER:END -->
 
 ### 标准能力别名与自动路由速查
@@ -66,9 +67,9 @@ cowork/
 ├── integrations/
 │   └── cowork-orchestrator-plugin/   # 全局常驻 Antigravity 插件（setup.ps1 自动部署至 ~/.gemini/config/plugins/cowork-orchestrator/）
 │       ├── plugin.json
-│       └── rules/AGENTS.md           # 全对话生效：Orchestrator 规划期双开、三档 -HostModel 与 KV 缓存铁律（<=1.5 KB）
+│       └── rules/AGENTS.md           # 全对话生效：Orchestrator 规划期双开、三档 -HostModel、KV 缓存与多池 LPT/SDM/TDM 铁律（<=2.2 KB）
 ├── registry/
-│   ├── models.json                   # 数据化模型档案（10 维能力分、锁定标记、别名、硬规则、三档主控策略参数）
+│   ├── models.json                   # 数据化模型档案（10 维能力分、锁定标记、别名、硬规则、三档主控与池并发配额）
 │   ├── research.schema.json          # 新模型联网调研 JSON Schema
 │   ├── probe-grade.schema.json       # 异构匿名盲评输出 JSON Schema
 │   ├── CHANGELOG.md                  # 档案修订日志
@@ -76,12 +77,13 @@ cowork/
 │   └── proposals/                    # 待人工确认的调分/别名/下架提案（跨源按字段路径去重）
 ├── references/
 │   ├── model-profiles.md             # 各主力模型优缺点与避坑指南
-│   ├── collaboration-patterns.md     # 协作模式（含三档主控感知、/swarm 单点 gatekeeper 与 KV 缓存协议）与模板
+│   ├── collaboration-patterns.md     # 协作模式（含三档主控感知、/swarm 单点 gatekeeper、KV 缓存与多池 LPT/SDM/TDM 协议）与模板
 │   └── research-protocol.md          # 新模型自动调研与异构交叉核验协议
 ├── scripts/
 │   ├── setup.ps1                     # 安装引导、阵容切换与 cowork-orchestrator 全局插件同步（支持 -SkipGlobalPlugin）
-│   ├── route.ps1                     # 按标签、-HostModel（三档主控感知）与机械降档规则自动派工
-│   ├── invoke-model.ps1              # 统一跨通道调用入口（-ContextFiles 置顶缓存、默认静默流 .events.jsonl、cached_tokens 遥测、Cockpit 切号自愈）
+│   ├── route.ps1                     # 按标签、-HostModel（三档主控感知）、-BusyAgents/-PreferIdle 与 parallel_lanes 自动派工
+│   ├── invoke-model.ps1              # 统一跨通道调用入口（三池并发槽位排队、-ContextFiles 置顶缓存、静默 .events.jsonl、cached_tokens 遥测、Cockpit 切号自愈）
+│   ├── pack-context.ps1              # 静态上下文打包与 -GitDiff + -TestLogFile (<=20行) 增量审稿打包器
 │   ├── detect-models.ps1             # 自动扫描 agy 与 Codex 目录发现新模型 / 离线模型
 │   ├── research-prompt.ps1           # 生成新模型联网调研提示词（带防并发租约）
 │   ├── apply-research.ps1            # 分级应用调研结果、生成提案与回滚档案
@@ -89,12 +91,12 @@ cowork/
 │   ├── probe-model.ps1               # 5 道去剧透标准小测题 + 可选手动异构匿名盲评（-Grade）
 │   ├── calibrate-telemetry.ps1       # 30 天真实返工率与实测耗时自校准提案器
 │   ├── sync-docs.ps1                 # 从 models.json 自动渲染受管文档区块与防漂移校验（-Check）
-│   ├── doctor.ps1                    # 环境自检、Junction 自愈与新版 Codex shell 能力探测
+│   ├── doctor.ps1                    # 环境自检、Junction 自愈、slot_hygiene 池租约清理与新版 Codex shell 能力探测
 │   ├── maintain.ps1                  # 一键自我维护与自我升级编排器（含 selftest 门禁回滚与安全 Git 提交）
 │   ├── extract-files.ps1             # 双遍原子落盘（Re-plan 硬熔断拦截 + Allowed/Forbidden 分片白黑名单 + 防穿越/Junction）
 │   ├── sync-to-codex.ps1             # 创建 ~/.codex/skills/cowork Junction 实现双端同源
 │   ├── selftest.ps1                  # 全量静态检查 + 文档防漂移门禁 + 7 套离线回归测试套件
-│   └── lib/                          # 公共底层库（文件锁、原子写入、账本幂等归档、SHA-256 凭证指纹、Cockpit 等待）
+│   └── lib/                          # 公共底层库（分层锁与池槽位信号灯、原子写入、账本幂等归档、SHA-256 凭证指纹、Cockpit 等待）
 ├── evals/                            # 新模型探测题库与测试夹具
 └── tests/                            # 离线回归测试（apply / detect / invoke / maintain / probe / route / setup）
 ```
@@ -115,6 +117,10 @@ cowork/
    - **静态包前置**：多文件任务先用 `4H High` 生成 `<scratch>/context_pack.md`，调用 `invoke-model.ps1` 时传 `-ContextFiles` 将其固定置顶于 `=====TASK_INSTRUCTIONS=====` 之前，吃满前缀 KV 缓存；
    - **默认静默 stdout 与遥测**：`invoke-model.ps1` 默认静默不打印中间流 JSON（完整事件写 `$HOME\.cowork\live\<id>.events.jsonl`，7 天清理；仅排障加 `-StreamStdout`），并在 `usage` / `usage.jsonl` 采集 `cached_tokens` 与 `cache_hit_rate`；
    - **`-Resume` 边界、Swarm 复用与日志节流**：窄域同会话续问用 `-Resume`，独立 Verifier / 切号后开新会话 + `-ContextFiles`；Swarm 同探索前缀用 `fork` 吃热缓存，可复用 Worker 留 `waiting`（0 耗），按 `#seq` 与单向 `@peer` 隔离看板；长测试输出写日志只摘 `<= 20` 行入主对话。
+5. **多池负载均衡、LPT 调度与 SDM/TDM 切片**：
+   - **三池槽位限流与排队（`invoke-model.ps1 -SlotWaitSec -NoSlotWait`）**：基于 `$HOME\.cowork\slots` 实施三池并发配额（`agy_google <=6`、`codex_openai <=2`、`agy_anthropic <=2`），支持死 PID / 陈旧租约自动回收；满槽默认在启动前进入 `queued_slot` 排队并上报 `pool` 与 `slot_wait_sec`（Codex 首包握手计时在获槽后开始），传 `-NoSlotWait` 立即返回退出码 `5`；
+   - **多池感知与 LPT 泳道（`route.ps1 -BusyAgents -PreferIdle`）**：叠加实时槽位与 `-BusyAgents` 输出 `orchestration.{pool_load, scale_out_hint, parallel_lanes}`；`-PreferIdle` 在严守 `min_cap` 与 `hard_rules` 前提下将任务切往空闲池，活跃 `< 2` 时按 LPT `T=0` 先发 Astra 并同步拉开 `4H` 互斥分片/`tests/` 与 `Opus` 重叠终裁；
+   - **增量审稿打包器（`scripts/pack-context.ps1`）**：支持确定性静态打包（`static_pack`）与 `-GitDiff [-AllowedPrefixes] -TestLogFile <log>`（末尾 `<= 20` 行）增量 Diff 打包，配合本地语法/单测快筛实现三拍重叠微切片流水线。
 
 ## 安装、自选默认模型与性能评估（Windows PowerShell）
 

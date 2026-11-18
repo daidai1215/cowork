@@ -11,7 +11,7 @@ $environmentNames = @(
     'MODEL_ORCHESTRA_AGY_WRAPPER', 'MODEL_ORCHESTRA_NOW',
     'MODEL_ORCHESTRA_CODEX', 'MODEL_ORCHESTRA_CODEX_HOME',
     'MODEL_ORCHESTRA_ROTATION_WAIT_MS', 'MODEL_ORCHESTRA_PROXY',
-    'MODEL_ORCHESTRA_SKIP_PROXY_PRECHECK'
+    'MODEL_ORCHESTRA_SKIP_PROXY_PRECHECK', 'MODEL_ORCHESTRA_FAKE_ALIVE_PIDS'
 )
 $savedEnvironment = @{}
 foreach ($name in $environmentNames) {
@@ -1403,6 +1403,363 @@ exit 0
         $h4PeakOverrideRun.code -eq 0 -and $h4PeakOverrideRun.json.effort -eq 'xhigh' -and
         $h4ExplicitRun.code -eq 0 -and $h4ExplicitRun.json.effort -eq 'xhigh'
     )
+
+    # Multi-pool concurrency slot lease tests:
+    # (a) Pool resolution & simultaneous non-blocking acquisition across distinct pools
+    Assert-Test 'Pool resolution maps codex, anthropic, and google models accurately' (
+        (Get-OrchestraPoolName ([pscustomobject]@{ id = 'gpt-6-astra'; channel = 'codex' })) -eq 'codex_openai' -and
+        (Get-OrchestraPoolName ([pscustomobject]@{ id = 'claude-opus-5-5'; channel = 'agy' })) -eq 'agy_anthropic' -and
+        (Get-OrchestraPoolName ([pscustomobject]@{ id = 'gemini-4-hydrogen'; channel = 'agy' })) -eq 'agy_google'
+    )
+    $dryCodexPool = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gpt-6-astra', '-Prompt', 'TEST', '-DryRun')
+    )
+    $dryAnthropicPool = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'claude-opus-5-5', '-Prompt', 'TEST', '-DryRun')
+    )
+    $dryGooglePool = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gemini-4-hydrogen', '-Prompt', 'TEST', '-DryRun')
+    )
+    Assert-Test 'DryRun exposes pool and pool_limit for all three provider pools' (
+        $dryCodexPool.json.pool -eq 'codex_openai' -and $dryCodexPool.json.pool_limit -eq 2 -and
+        $dryAnthropicPool.json.pool -eq 'agy_anthropic' -and $dryAnthropicPool.json.pool_limit -eq 2 -and
+        $dryGooglePool.json.pool -eq 'agy_google' -and $dryGooglePool.json.pool_limit -eq 6
+    )
+
+    $slotTestState = Join-Path $sandbox 'slot-unit-state'
+    $slotPaths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir $slotTestState
+    $acquiredLeases = New-Object 'System.Collections.Generic.List[object]'
+    try {
+        [void]$acquiredLeases.Add((Acquire-OrchestraPoolSlot -Paths $slotPaths -Pool 'codex_openai' -Limit 2 -InvocationId 'u-c1' -ModelId 'gpt-6-astra' -Channel 'codex' -NoWait))
+        [void]$acquiredLeases.Add((Acquire-OrchestraPoolSlot -Paths $slotPaths -Pool 'codex_openai' -Limit 2 -InvocationId 'u-c2' -ModelId 'gpt-6-astra' -Channel 'codex' -NoWait))
+        [void]$acquiredLeases.Add((Acquire-OrchestraPoolSlot -Paths $slotPaths -Pool 'agy_anthropic' -Limit 2 -InvocationId 'u-a1' -ModelId 'claude-opus-5-5' -Channel 'agy' -NoWait))
+        [void]$acquiredLeases.Add((Acquire-OrchestraPoolSlot -Paths $slotPaths -Pool 'agy_anthropic' -Limit 2 -InvocationId 'u-a2' -ModelId 'claude-opus-5-5' -Channel 'agy' -NoWait))
+        [void]$acquiredLeases.Add((Acquire-OrchestraPoolSlot -Paths $slotPaths -Pool 'agy_google' -Limit 6 -InvocationId 'u-g1' -ModelId 'gemini-4-hydrogen' -Channel 'agy' -NoWait))
+        $activeSnap = Get-ActivePoolSlotStatus -Paths $slotPaths
+        Assert-Test 'Simultaneous slots acquire across all pools without cross-blocking' (
+            $activeSnap.total_active -eq 5 -and
+            $activeSnap.underutilized -eq $false -and
+            $activeSnap.pools.codex_openai.active -eq 2 -and
+            $activeSnap.pools.codex_openai.available -eq 0 -and
+            $activeSnap.pools.agy_anthropic.active -eq 2 -and
+            $activeSnap.pools.agy_anthropic.available -eq 0 -and
+            $activeSnap.pools.agy_google.active -eq 1 -and
+            $activeSnap.pools.agy_google.available -eq 5
+        )
+    }
+    finally {
+        $pairIdx = 0
+        foreach ($leaseObj in $acquiredLeases) {
+            $pairIdx++
+            Release-OrchestraPoolSlot -Paths $slotPaths -LeasePath ([string]$leaseObj.lease_path) -InvocationId ([string](Read-JsonFile ([string]$leaseObj.lease_path)).invocation_id)
+        }
+    }
+    $afterRelSnap = Get-ActivePoolSlotStatus -Paths $slotPaths
+    Assert-Test 'Release-OrchestraPoolSlot removes leases and restores underutilized status' (
+        $afterRelSnap.total_active -eq 0 -and
+        $afterRelSnap.underutilized -eq $true -and
+        [IO.Directory]::GetFiles($slotPaths.Slots, '*.json').Length -eq 0
+    )
+
+    # (b) Dead-PID and >7200s stale lease auto-reclamation
+    $staleSlotState = Join-Path $sandbox 'slot-stale-state'
+    $staleSlotPaths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir $staleSlotState
+    [void][IO.Directory]::CreateDirectory($staleSlotPaths.Slots)
+    $deadPidLease = Join-Path $staleSlotPaths.Slots 'codex_openai-1.json'
+    $expiredAgeLease = Join-Path $staleSlotPaths.Slots 'agy_google-1.json'
+    $liveLease = Join-Path $staleSlotPaths.Slots 'agy_anthropic-1.json'
+    Write-JsonAtomic -Path $deadPidLease -Object @{
+        invocation_id = 'dead-1'; pid = 999991; pool = 'codex_openai'; slot = 1
+        model = 'gpt-6-astra'; channel = 'codex'; started_utc = (Get-OrchestraNow).ToString('o')
+    }
+    Write-JsonAtomic -Path $expiredAgeLease -Object @{
+        invocation_id = 'old-1'; pid = [int]$PID; pool = 'agy_google'; slot = 1
+        model = 'gemini-4-hydrogen'; channel = 'agy'; started_utc = (Get-OrchestraNow).AddSeconds(-7300).ToString('o')
+    }
+    Write-JsonAtomic -Path $liveLease -Object @{
+        invocation_id = 'live-1'; pid = [int]$PID; pool = 'agy_anthropic'; slot = 1
+        model = 'claude-opus-5-5'; channel = 'agy'; started_utc = (Get-OrchestraNow).ToString('o')
+    }
+    $reclaimedSnap = Get-ActivePoolSlotStatus -Paths $staleSlotPaths -CleanupStale
+    Assert-Test 'Dead-PID and >7200s stale leases are reclaimed while live leases stay intact' (
+        $reclaimedSnap.reclaimed_stale -eq 2 -and
+        $reclaimedSnap.total_active -eq 1 -and
+        -not [IO.File]::Exists($deadPidLease) -and
+        -not [IO.File]::Exists($expiredAgeLease) -and
+        [IO.File]::Exists($liveLease)
+    )
+    Release-OrchestraPoolSlot -Paths $staleSlotPaths -LeasePath $liveLease -InvocationId 'live-1'
+
+    # (c) MODEL_ORCHESTRA_FAKE_ALIVE_PIDS full pool -> -NoSlotWait exits 5, distinct pool succeeds, queued wait acquires on release
+    $capHome = Join-Path $sandbox 'cap-codex-home'
+    [void][IO.Directory]::CreateDirectory($capHome)
+    [IO.File]::WriteAllBytes((Join-Path $capHome 'auth.json'), $script:OrchestraUtf8.GetBytes('{"fixture":"cap"}'))
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME', $capHome)
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX', $fakeCodexPath)
+    $capState = Join-Path $sandbox 'cap-state'
+    $capPaths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir $capState
+    [void][IO.Directory]::CreateDirectory($capPaths.Slots)
+    $fakeLease1 = Join-Path $capPaths.Slots 'codex_openai-1.json'
+    $fakeLease2 = Join-Path $capPaths.Slots 'codex_openai-2.json'
+    Write-JsonAtomic -Path $fakeLease1 -Object @{
+        invocation_id = 'fake-c1'; pid = 999901; pool = 'codex_openai'; slot = 1
+        model = 'gpt-6-astra'; channel = 'codex'; started_utc = (Get-OrchestraNow).ToString('o')
+    }
+    Write-JsonAtomic -Path $fakeLease2 -Object @{
+        invocation_id = 'fake-c2'; pid = 999902; pool = 'codex_openai'; slot = 2
+        model = 'gpt-6-astra'; channel = 'codex'; started_utc = (Get-OrchestraNow).ToString('o')
+    }
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_FAKE_ALIVE_PIDS', '999901,999902')
+
+    $noWaitFail = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $capState,
+        '-WorkDir', $sandbox, '-Model', 'gpt-6-astra', '-Prompt', 'SUCCESS_TEXT', '-NoSlotWait'
+    )
+    $otherPoolOk = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $capState,
+        '-WorkDir', $sandbox, '-Model', 'claude-opus-5-5', '-Prompt', 'TEST_SUCCESS', '-NoSlotWait'
+    )
+    Assert-Test 'Full codex_openai pool fails fast (exit 5) with -NoSlotWait while agy_anthropic runs unblocked' (
+        $noWaitFail.code -eq 5 -and
+        [string]$noWaitFail.json.error -match 'ORCHESTRA_LOCK_TIMEOUT' -and
+        $otherPoolOk.code -eq 0 -and
+        $otherPoolOk.json.pool -eq 'agy_anthropic' -and
+        [IO.File]::Exists($fakeLease1) -and [IO.File]::Exists($fakeLease2)
+    )
+
+    $queueStatusPath = Join-Path $sandbox 'queued-status.json'
+    $qInfo = New-Object Diagnostics.ProcessStartInfo
+    $qInfo.FileName = $script:TestHost
+    $qArgs = @(
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $invokeScript,
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $capState,
+        '-WorkDir', $sandbox, '-Model', 'gpt-6-astra', '-Prompt', 'SUCCESS_TEXT',
+        '-SlotWaitSec', '15', '-StatusFile', $queueStatusPath
+    )
+    $qInfo.Arguments = (@($qArgs | ForEach-Object { ConvertTo-OrchestraArgument $_ }) -join ' ')
+    $qInfo.UseShellExecute = $false
+    $qInfo.CreateNoWindow = $true
+    $qInfo.RedirectStandardOutput = $true
+    $qInfo.RedirectStandardError = $true
+    $qInfo.StandardOutputEncoding = $script:OrchestraUtf8
+    $qInfo.StandardErrorEncoding = $script:OrchestraUtf8
+    $qInfo.WorkingDirectory = $sandbox
+    $qProc = [Diagnostics.Process]::Start($qInfo)
+    $qStdoutTask = $qProc.StandardOutput.ReadToEndAsync()
+    $qStderrTask = $qProc.StandardError.ReadToEndAsync()
+    $sawQueued = $false
+    $qWaitSw = [Diagnostics.Stopwatch]::StartNew()
+    while ($qWaitSw.Elapsed.TotalSeconds -lt 8 -and -not $qProc.HasExited) {
+        if ([IO.File]::Exists($queueStatusPath)) {
+            try {
+                $qSt = Read-JsonFile -Path $queueStatusPath
+                if ($null -ne $qSt -and [string](Get-OrchestraProperty $qSt 'phase' '') -eq 'queued_slot') {
+                    $sawQueued = $true
+                    break
+                }
+            }
+            catch {}
+        }
+        Start-Sleep -Milliseconds 100
+    }
+    if ([IO.File]::Exists($fakeLease1)) { [IO.File]::Delete($fakeLease1) }
+    $qExited = $qProc.WaitForExit(15000)
+    if (-not $qExited) { try { Stop-OrchestraProcessTree -Process $qProc } catch {} }
+    $qOutText = $qStdoutTask.GetAwaiter().GetResult()
+    $null = $qStderrTask.GetAwaiter().GetResult()
+    $qJson = $null
+    $qNonEmpty = @($qOutText -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($qNonEmpty.Count -gt 0) {
+        try { $qJson = $qNonEmpty[$qNonEmpty.Count - 1] | ConvertFrom-Json } catch {}
+    }
+    $postQueueSnap = Get-ActivePoolSlotStatus -Paths $capPaths
+    Assert-Test 'Queued invocation enters queued_slot phase, acquires released slot, succeeds, and cleans up lease' (
+        $sawQueued -and $qExited -and $qProc.ExitCode -eq 0 -and
+        $null -ne $qJson -and $qJson.pool -eq 'codex_openai' -and
+        [double]$qJson.slot_wait_sec -gt 0 -and
+        $postQueueSnap.pools.codex_openai.active -eq 1
+    )
+    $qProc.Dispose()
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_FAKE_ALIVE_PIDS', $null)
+
+    # (d) pack-context.ps1 static_pack and -GitDiff + -TestLogFile (<=20 lines)
+    $packScript = Join-Path $root 'scripts\pack-context.ps1'
+    $packScriptBytes = [IO.File]::ReadAllBytes($packScript)
+    Assert-Test 'pack-context.ps1 is saved as UTF-8 with BOM for PS 5.1' (
+        $packScriptBytes.Length -ge 3 -and
+        $packScriptBytes[0] -eq 239 -and $packScriptBytes[1] -eq 187 -and $packScriptBytes[2] -eq 191
+    )
+
+    $packRepo = Join-Path $sandbox 'pack-repo'
+    [void][IO.Directory]::CreateDirectory($packRepo)
+    $null = Invoke-OrchestraProcess -FilePath 'git' -Arguments @('-C', $packRepo, 'init') -WorkDir $packRepo -TimeoutSec 15 -CaptureStdout
+    $null = Invoke-OrchestraProcess -FilePath 'git' -Arguments @('-C', $packRepo, 'config', 'user.email', 'test@example.com') -WorkDir $packRepo -TimeoutSec 15 -CaptureStdout
+    $null = Invoke-OrchestraProcess -FilePath 'git' -Arguments @('-C', $packRepo, 'config', 'user.name', 'Test') -WorkDir $packRepo -TimeoutSec 15 -CaptureStdout
+    $packA = Join-Path $packRepo 'a.txt'
+    $packB = Join-Path $packRepo 'b.txt'
+    $packLong = Join-Path $packRepo 'long.txt'
+    [IO.File]::WriteAllBytes($packA, ([byte[]](0xEF, 0xBB, 0xBF) + $script:OrchestraUtf8.GetBytes("alpha`r`nbeta`r`n")))
+    [IO.File]::WriteAllText($packB, "b1`r`nb2`r`n", $script:OrchestraUtf8)
+    [IO.File]::WriteAllText($packLong, ((1..15 | ForEach-Object { "line-$_" }) -join "`r`n") + "`r`n", $script:OrchestraUtf8)
+    $null = Invoke-OrchestraProcess -FilePath 'git' -Arguments @('-C', $packRepo, 'add', '.') -WorkDir $packRepo -TimeoutSec 15 -CaptureStdout
+    $null = Invoke-OrchestraProcess -FilePath 'git' -Arguments @('-C', $packRepo, 'commit', '-m', 'init') -WorkDir $packRepo -TimeoutSec 15 -CaptureStdout
+
+    $staticOut = Join-Path $sandbox 'static-pack.md'
+    $staticRun = Invoke-TestScript -Script $packScript -Arguments @(
+        '-WorkDir', $packRepo, '-Files', 'b.txt,a.txt,long.txt',
+        '-OutFile', $staticOut, '-MaxLinesPerFile', '5'
+    )
+    $staticBytes = [IO.File]::ReadAllBytes($staticOut)
+    $staticText = [IO.File]::ReadAllText($staticOut, $script:OrchestraUtf8)
+    Assert-Test 'pack-context static_pack sorts deterministically, strips BOM/CR, truncates, and writes BOM-less UTF-8' (
+        $staticRun.code -eq 0 -and
+        $staticRun.json.mode -eq 'static_pack' -and
+        $staticRun.json.files_count -eq 3 -and
+        $staticRun.json.truncated -eq $true -and
+        ($staticBytes.Length -lt 3 -or -not ($staticBytes[0] -eq 239 -and $staticBytes[1] -eq 187 -and $staticBytes[2] -eq 191)) -and
+        -not $staticText.Contains("`r") -and
+        -not $staticText.Contains([char]0xFEFF) -and
+        $staticText.IndexOf('## File: a.txt') -ge 0 -and
+        $staticText.IndexOf('## File: a.txt') -lt $staticText.IndexOf('## File: b.txt') -and
+        $staticText.IndexOf('## File: b.txt') -lt $staticText.IndexOf('## File: long.txt') -and
+        $staticText.Contains('... [truncated 10 lines]')
+    )
+
+    [IO.File]::WriteAllText($packA, "alpha`r`nbeta`r`ngamma-added`r`n", $script:OrchestraUtf8)
+    [IO.File]::WriteAllText((Join-Path $packRepo 'untracked.txt'), "fresh`r`n", $script:OrchestraUtf8)
+    $sampleLog = Join-Path $sandbox 'sample-test.log'
+    [IO.File]::WriteAllText($sampleLog, ((1..50 | ForEach-Object { "log-$_" }) -join "`r`n") + "`r`n", $script:OrchestraUtf8)
+    $deltaOut = Join-Path $sandbox 'delta-pack.md'
+    $deltaRun = Invoke-TestScript -Script $packScript -Arguments @(
+        '-WorkDir', $packRepo, '-GitDiff', '-AllowedPrefixes', 'a.txt,untracked.txt',
+        '-TestLogFile', $sampleLog, '-OutFile', $deltaOut, '-MaxLogTailLines', '20'
+    )
+    $deltaText = [IO.File]::ReadAllText($deltaOut, $script:OrchestraUtf8)
+    $tailIdx = $deltaText.IndexOf('## Test Log Tail')
+    $tailSectionLines = @()
+    if ($tailIdx -ge 0) {
+        $tailSectionLines = @(($deltaText.Substring($tailIdx) -split "`n") | Select-Object -Skip 1 | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+    Assert-Test 'pack-context -GitDiff emits delta diff and <=20 test log tail lines' (
+        $deltaRun.code -eq 0 -and
+        $deltaRun.json.mode -eq 'delta_diff' -and
+        $deltaRun.json.files_count -eq 2 -and
+        $deltaRun.json.truncated -eq $true -and
+        -not $deltaText.Contains("`r") -and
+        $deltaText.Contains('## Git Status') -and
+        $deltaText.Contains('## Git Diff') -and
+        $deltaText.Contains('+gamma-added') -and
+        $tailSectionLines.Count -eq 20 -and
+        $deltaText.Contains('log-31') -and
+        $deltaText.Contains('log-50') -and
+        -not $deltaText.Contains("log-30`n")
+    )
+
+    # (e) doctor.ps1 slot_hygiene check & -Repair dead-PID reclamation
+    $docSlotState = Join-Path $sandbox 'doc-slot-state'
+    $docSlotPaths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir $docSlotState
+    [void][IO.Directory]::CreateDirectory($docSlotPaths.Slots)
+    $docDeadLease = Join-Path $docSlotPaths.Slots 'codex_openai-1.json'
+    Write-JsonAtomic -Path $docDeadLease -Object @{
+        invocation_id = 'doc-dead-1'; pid = 999992; pool = 'codex_openai'; slot = 1
+        model = 'gpt-6-astra'; channel = 'codex'; started_utc = (Get-OrchestraNow).ToString('o')
+    }
+    $doctorScript = Join-Path $root 'scripts\doctor.ps1'
+    $docInspect = Invoke-TestScript -Script $doctorScript -Arguments @(
+        '-NoNetwork', '-CodexDestination', '', '-RegistryPath', $fixtureRegistry, '-StateDir', $docSlotState
+    )
+    $docInspectSlotCheck = @($docInspect.json.checks | Where-Object { $_.name -eq 'slot_hygiene' }) | Select-Object -First 1
+    $existsAfterInspect = [IO.File]::Exists($docDeadLease)
+    $docRepair = Invoke-TestScript -Script $doctorScript -Arguments @(
+        '-Repair', '-NoNetwork', '-CodexDestination', '', '-RegistryPath', $fixtureRegistry, '-StateDir', $docSlotState
+    )
+    $docRepairSlotCheck = @($docRepair.json.checks | Where-Object { $_.name -eq 'slot_hygiene' }) | Select-Object -First 1
+    Assert-Test 'doctor.ps1 slot_hygiene reports stale slots read-only and reclaims them under -Repair' (
+        $docInspect.code -eq 0 -and $null -ne $docInspectSlotCheck -and
+        $docInspectSlotCheck.passed -eq $true -and $docInspectSlotCheck.detail -match 'reclaimed=0;stale_detected=1' -and
+        $existsAfterInspect -and
+        $docRepair.code -eq 0 -and $null -ne $docRepairSlotCheck -and
+        $docRepairSlotCheck.passed -eq $true -and $docRepairSlotCheck.detail -match 'reclaimed=1;stale_detected=1' -and
+        @($docRepair.json.repairs) -contains 'stale_pool_slots_cleaned' -and
+        -not [IO.File]::Exists($docDeadLease)
+    )
+
+    # (f) Rev 9 hardening regressions: Release-OrchestraPoolSlot ownership, ad-hoc pool limits + slot_wait_sec on timeout, pack-context BaseRef + -uall
+    $ownState = Join-Path $sandbox 'slot-own-state'
+    $ownPaths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir $ownState
+    [void][IO.Directory]::CreateDirectory($ownPaths.Slots)
+    $ownLease = Join-Path $ownPaths.Slots 'codex_openai-1.json'
+    $corruptLease = Join-Path $ownPaths.Slots 'agy_google-1.json'
+    Write-JsonAtomic -Path $ownLease -Object @{
+        invocation_id = 'owner-1'; pid = [int]$PID; pool = 'codex_openai'; slot = 1
+        model = 'gpt-6-astra'; channel = 'codex'; started_utc = (Get-OrchestraNow).ToString('o')
+    }
+    [IO.File]::WriteAllText($corruptLease, '{not-valid-json', $script:OrchestraUtf8)
+    Release-OrchestraPoolSlot -Paths $ownPaths -LeasePath $ownLease -InvocationId ''
+    Release-OrchestraPoolSlot -Paths $ownPaths -LeasePath $ownLease -InvocationId 'wrong-owner'
+    Release-OrchestraPoolSlot -Paths $ownPaths -LeasePath $corruptLease -InvocationId 'any-owner'
+    $afterUnsafeRel = ([IO.File]::Exists($ownLease) -and [IO.File]::Exists($corruptLease))
+    Release-OrchestraPoolSlot -Paths $ownPaths -LeasePath $ownLease -InvocationId 'owner-1'
+    Assert-Test 'Release-OrchestraPoolSlot enforces non-empty matching invocation_id and refuses blind delete on corrupt lease' (
+        $afterUnsafeRel -and (-not [IO.File]::Exists($ownLease)) -and [IO.File]::Exists($corruptLease)
+    )
+
+    $adhocPoolReg = Join-Path $sandbox 'adhoc-pool-models.json'
+    $adhocRegObj = Read-JsonFile -Path $fixtureRegistry
+    Set-OrchestraProperty $adhocRegObj.policy 'pool_concurrency_limits' ([pscustomobject]@{
+        codex_openai = 1; agy_anthropic = 2; agy_google = 6
+    })
+    Write-JsonAtomic -Path $adhocPoolReg -Object $adhocRegObj
+    $adhocDryLimit = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $adhocPoolReg, '-StateDir', (Join-Path $sandbox 'adhoc-limit-state'),
+        '-WorkDir', $sandbox, '-AdHocChannel', 'codex', '-AdHocModelFlag', 'custom-codex',
+        '-Prompt', 'TEST', '-DryRun'
+    )
+    $timeoutState = Join-Path $sandbox 'slot-timeout-state'
+    $timeoutPaths = Get-OrchestraPaths -RegistryPath $adhocPoolReg -StateDir $timeoutState
+    [void][IO.Directory]::CreateDirectory($timeoutPaths.Slots)
+    Write-JsonAtomic -Path (Join-Path $timeoutPaths.Slots 'codex_openai-1.json') -Object @{
+        invocation_id = 'busy-1'; pid = 999901; pool = 'codex_openai'; slot = 1
+        model = 'gpt-6-astra'; channel = 'codex'; started_utc = (Get-OrchestraNow).ToString('o')
+    }
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_FAKE_ALIVE_PIDS', '999901')
+    $timeoutSlotRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $adhocPoolReg, '-StateDir', $timeoutState,
+        '-WorkDir', $sandbox, '-AdHocChannel', 'codex', '-AdHocModelFlag', 'custom-codex',
+        '-Prompt', 'SUCCESS_TEXT', '-SlotWaitSec', '1'
+    )
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_FAKE_ALIVE_PIDS', $null)
+    $timeoutUsageEvents = @(Read-UsageEvents -Paths $timeoutPaths)
+    Assert-Test 'Ad-hoc invocations honor policy.pool_concurrency_limits and populate slot_wait_sec on slot timeout' (
+        $adhocDryLimit.code -eq 0 -and
+        $adhocDryLimit.json.pool -eq 'codex_openai' -and
+        $adhocDryLimit.json.pool_limit -eq 1 -and
+        $timeoutSlotRun.code -eq 5 -and
+        [double]$timeoutSlotRun.json.slot_wait_sec -ge 0.8 -and
+        $timeoutUsageEvents.Count -eq 1 -and
+        [double]$timeoutUsageEvents[0].slot_wait_sec -ge 0.8
+    )
+
+    $badRefRun = Invoke-TestScript -Script $packScript -Arguments @(
+        '-WorkDir', $packRepo, '-GitDiff', '-BaseRef', '--output=pwned', '-OutFile', (Join-Path $sandbox 'bad-ref.md')
+    )
+    $untrackedSubDir = Join-Path $packRepo 'newdir'
+    [void][IO.Directory]::CreateDirectory($untrackedSubDir)
+    [IO.File]::WriteAllText((Join-Path $untrackedSubDir 'sub1.txt'), "s1`n", $script:OrchestraUtf8)
+    [IO.File]::WriteAllText((Join-Path $untrackedSubDir 'sub2.txt'), "s2`n", $script:OrchestraUtf8)
+    $uallOut = Join-Path $sandbox 'uall-delta.md'
+    $uallRun = Invoke-TestScript -Script $packScript -Arguments @(
+        '-WorkDir', $packRepo, '-GitDiff', '-BaseRef', 'HEAD', '-OutFile', $uallOut
+    )
+    $uallText = [IO.File]::ReadAllText($uallOut, $script:OrchestraUtf8)
+    Assert-Test 'pack-context rejects flag-like BaseRef and expands untracked directories via -uall' (
+        $badRefRun.code -eq 2 -and
+        [string]$badRefRun.json.error -match 'ORCHESTRA_ARGS: Invalid BaseRef' -and
+        $uallRun.code -eq 0 -and
+        $uallRun.json.files_count -eq 4 -and
+        $uallText.Contains('newdir/sub1.txt') -and
+        $uallText.Contains('newdir/sub2.txt')
+    )
 }
 catch {
     $script:Failed++
@@ -1422,6 +1779,15 @@ finally {
             if (-not $resolved.StartsWith($parentPrefix, [StringComparison]::OrdinalIgnoreCase) -or
                 $leaf -notmatch '^orchestra invoke tests [a-f0-9]{32}$') {
                 throw 'Refusing cleanup outside the unique test directory.'
+            }
+            foreach ($roFile in [IO.Directory]::EnumerateFiles($resolved, '*', [IO.SearchOption]::AllDirectories)) {
+                try {
+                    $attrs = [IO.File]::GetAttributes($roFile)
+                    if (($attrs -band [IO.FileAttributes]::ReadOnly) -ne 0) {
+                        [IO.File]::SetAttributes($roFile, ($attrs -band (-bnot [IO.FileAttributes]::ReadOnly)))
+                    }
+                }
+                catch {}
             }
             [IO.Directory]::Delete($resolved, $true)
         }

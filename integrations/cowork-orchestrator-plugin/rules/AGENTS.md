@@ -13,3 +13,8 @@
 3. **上下文与 KV 缓存铁律**
 - 跨多文件先用 `4H High` 生成 `<scratch>/context_pack.md`。
 - `invoke-model.ps1` 用默认静默流(勿传 `-StreamStdout`)+`-ContextFiles` 锁静态包顶部吃 KV 缓存；长测试写日志摘 `<=20` 行入主对话。
+
+4. **多池负载均衡与空分/时分切片铁律**
+- 跨池+LPT: 活跃子智能体`<2`时主动跨三池(`agy_google` 4H/Carbon `<=6`+`codex_openai` Astra `<=2`+`agy_anthropic` Opus `<=2`)并行旁路: **LPT慢路径`T=0`先发Astra**+`4H Extra`写互斥分片/`tests/`+`Opus 5.5`重叠截图 Aesthetic Gate 或 `<=800` 字终裁。
+- 空分复用: `workspace:"share"`/`extract-files.ps1 -AllowedPrefixes`物理隔离; Swarm优先唤醒 `waiting` 热缓存空闲小工 Work-Stealing。
+- 时分+增量审: 微切片`写->审->修`重叠流; `pack-context.ps1`建静态包`<scratch>/context_pack.md`置顶锁KV缓存, 二审先本地语法/单测快筛再用 `pack-context.ps1 -GitDiff` 喂增量Diff。

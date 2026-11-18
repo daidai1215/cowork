@@ -1,5 +1,11 @@
 # Cowork changelog
 
+## 2026-11-18T11:25:00.0000000Z - Multi-pool concurrency limits, load-aware routing (`-BusyAgents`, `-PreferIdle`, `parallel_lanes`), and SDM/TDM slot leasing
+- registry_rev: 8 -> 9
+- added `policy.pool_concurrency_limits` (`codex_openai=2`, `agy_anthropic=2`, `agy_google=6`)
+- updated `route.ps1` with live slot load tracking, `-BusyAgents` / `-PreferIdle` safe load balancing (honoring `min_cap`, `primary_disabled`, `hard_rules`), `orchestration.pool_load`, `orchestration.scale_out_hint`, and `orchestration.parallel_lanes`
+- backup: registry/history/models-20261118-192000-8-pre9.json
+
 ## 2026-11-18T10:30:00.0000000Z - Host-aware three-tier routing (`orchestrator_fast`, `carbon_peak`, `hydrogen_max`), mechanical `high` tier, and `final_reviewer` gate
 - registry_rev: 7 -> 8
 - added tags: `bulk`, `boilerplate`, `scan`, `test_gen`, and `architecture` (`min_cap=8.5`)

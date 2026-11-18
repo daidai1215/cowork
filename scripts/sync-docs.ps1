@@ -174,6 +174,19 @@ function Build-RosterBlock {
     [void]$lines.Add('')
     [void]$lines.Add(('- **' + (U '\u53ef\u7528\u989d\u5ea6\u6392\u5e8f\uff08\u4f4e \u2192 \u9ad8\uff09') + '**: ' + $quotaOrder))
     [void]$lines.Add(('- **' + (U '\u54cd\u5e94\u901f\u5ea6\u6392\u5e8f\uff08\u5feb \u2192 \u6162\uff09') + '**: ' + $speedOrder))
+    $policyObj = Get-OrchestraProperty $Registry 'policy'
+    $poolLimitsObj = Get-OrchestraProperty $policyObj 'pool_concurrency_limits'
+    if ($null -ne $poolLimitsObj) {
+        $poolPairs = @(
+            foreach ($pKey in @('codex_openai', 'agy_anthropic', 'agy_google')) {
+                $pVal = Get-OrchestraProperty $poolLimitsObj $pKey
+                if ($null -ne $pVal) { '`{0}` <= {1}' -f $pKey, [int]$pVal }
+            }
+        )
+        if ($poolPairs.Count -gt 0) {
+            [void]$lines.Add(('- **' + (U '\u901a\u9053\u6c60\u5e76\u53d1\u4e0a\u9650') + ' (`pool_concurrency_limits`)**: ' + ($poolPairs -join ', ')))
+        }
+    }
     return ($lines.ToArray() -join "`n")
 }
 

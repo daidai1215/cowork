@@ -259,6 +259,18 @@ try {
     }
     Add-DoctorCheck $checks 'state_hygiene' $true ("expired_entries=" + $expiredCount)
 
+    # 6b. Pool slot lease hygiene
+    $doctorPolicy = if ($null -ne $registry) { Get-OrchestraProperty $registry 'policy' $null } else { $null }
+    $slotStatus = Get-ActivePoolSlotStatus -Paths $paths -Policy $doctorPolicy -CleanupStale:$Repair
+    if ([int]$slotStatus.reclaimed_stale -gt 0) {
+        [void]$repairs.Add('stale_pool_slots_cleaned')
+    }
+    $slotHygienePassed = $true
+    if ($Repair -and [int]$slotStatus.stale_detected -gt [int]$slotStatus.reclaimed_stale) {
+        $slotHygienePassed = $false
+    }
+    Add-DoctorCheck $checks 'slot_hygiene' $slotHygienePassed ("active=$($slotStatus.total_active);reclaimed=$($slotStatus.reclaimed_stale);stale_detected=$($slotStatus.stale_detected)")
+
     # 7. Codex non-interactive shell evolution probe
     $stateAfter = Read-State -Paths $paths
     $exeCache = Get-OrchestraProperty $stateAfter 'codex_exe_cache'
@@ -374,7 +386,7 @@ try {
         [void]$warnings.Add("Low outcome recording coverage ($coverageRate across $totalInv invocations); remember to call record-outcome.ps1.")
     }
 
-    $healthy = ($registryOk -and $docsOk -and [bool]$junctionStatus.valid)
+    $healthy = ($registryOk -and $docsOk -and [bool]$junctionStatus.valid -and $slotHygienePassed)
     Write-OrchestraResult -Object ([ordered]@{
         healthy = [bool]$healthy
         checks = $checks.ToArray()

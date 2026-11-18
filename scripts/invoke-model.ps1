@@ -16,6 +16,8 @@ param(
     [switch]$StreamStdout,
     [int]$TimeoutSec = 1800,
     [int]$ConnectTimeoutSec = 0,
+    [int]$SlotWaitSec = 300,
+    [switch]$NoSlotWait,
     [switch]$AllowCodexShell,
     [string]$StatusFile,
     [switch]$DryRun,
@@ -109,6 +111,10 @@ $explicitStatusPath = $null
 $reportedStatusFile = $null
 $eventsLogPath = $null
 $eventsWriter = $null
+$poolName = $null
+$poolLimits = $null
+$slotLease = $null
+$slotWaitedSec = 0.0
 $contextFilesList = New-Object 'System.Collections.Generic.List[string]'
 $startedUtc = (Get-OrchestraNow).ToString('o')
 $rotationEnabled = $false
@@ -126,7 +132,7 @@ try {
     if ($hasPrompt -eq $hasPromptFile) {
         throw 'ORCHESTRA_ARGS: Specify exactly one of -Prompt or -PromptFile.'
     }
-    if ($Access -notin @('read', 'write') -or $TimeoutSec -lt 0 -or $ConnectTimeoutSec -lt 0) {
+    if ($Access -notin @('read', 'write') -or $TimeoutSec -lt 0 -or $ConnectTimeoutSec -lt 0 -or $SlotWaitSec -lt 0) {
         throw 'ORCHESTRA_ARGS: Invalid access or timeout.'
     }
     if (-not [IO.Directory]::Exists($WorkDir)) {
@@ -212,6 +218,15 @@ try {
                 model_flag = $AdHocModelFlag
                 default_effort = $adHocDefault; efforts = $adHocEfforts
             }
+        }
+        if ($null -ne $paths -and [IO.File]::Exists($paths.Registry)) {
+            try {
+                $adHocReg = Read-JsonFile -Path $paths.Registry
+                if ($null -ne $adHocReg) {
+                    $policy = Get-OrchestraProperty $adHocReg 'policy' $null
+                }
+            }
+            catch {}
         }
     }
     else {
@@ -493,6 +508,9 @@ try {
     }
     else { throw "ORCHESTRA_EXTERNAL: Unsupported channel: $channel" }
 
+    $poolName = Get-OrchestraPoolName -Model $modelObject -Channel $channel
+    $poolLimits = Get-OrchestraPoolLimits -Policy $policy
+
     if ($DryRun) {
         $dryData = @{
             dry_run = $true; executable = $executable; executable_resolved = $false
@@ -501,6 +519,8 @@ try {
             access = $Access; work_dir = $WorkDir; effort = $Effort
             connect_timeout_sec = $effectiveConnectTimeout
             codex_shell_enabled = $codexShellEnabled
+            pool = $poolName
+            pool_limit = [int]$poolLimits[$poolName]
         }
     }
     else {
@@ -574,9 +594,11 @@ try {
                 invocation_id = $invocationId
                 model = $modelId
                 channel = $channel
+                pool = $poolName
                 effort = $Effort
                 attempt = [int]$attempts
                 phase = $Phase
+                slot_wait_sec = [double]$slotWaitedSec
                 session_id = $capture.session_id
                 proxy = $proxyUrl
                 codex_shell_enabled = [bool]$codexShellEnabled
@@ -765,6 +787,28 @@ try {
                         )
                         $null = & $writeStatus 'failed' ('result:' + $status) $null
                     }
+                }
+            }
+        }
+
+        if ($null -ne $paths -and -not [string]::IsNullOrWhiteSpace($poolName)) {
+            $poolLimit = [int]$poolLimits[$poolName]
+            $slotAcquireWatch = [Diagnostics.Stopwatch]::StartNew()
+            try {
+                $slotLease = Acquire-OrchestraPoolSlot -Paths $paths -Pool $poolName `
+                    -Limit $poolLimit -InvocationId $invocationId -ModelId $modelId `
+                    -Channel $channel -WaitSec $SlotWaitSec -NoWait:$NoSlotWait `
+                    -OnQueued {
+                        $null = & $writeStatus 'queued_slot' 'slot.wait' ("Waiting for free $poolName slot")
+                    }
+            }
+            finally {
+                $slotAcquireWatch.Stop()
+                $slotWaitedSec = if ($null -ne $slotLease) {
+                    [double]$slotLease.waited_sec
+                }
+                else {
+                    [Math]::Round($slotAcquireWatch.Elapsed.TotalSeconds, 3)
                 }
             }
         }
@@ -1031,6 +1075,15 @@ catch {
     [Console]::Error.WriteLine($errorMessage)
 }
 finally {
+    if ($null -ne $slotLease -and $null -ne $paths) {
+        try {
+            Release-OrchestraPoolSlot -Paths $paths `
+                -LeasePath ([string]$slotLease.lease_path) `
+                -InvocationId $invocationId
+        }
+        catch {}
+        $slotLease = $null
+    }
     if ($null -ne $eventsWriter) {
         try {
             $eventsWriter.Flush()
@@ -1082,6 +1135,8 @@ if (-not $DryRun -and $null -ne $paths -and $null -ne $modelObject) {
             account_switched = [bool]$accountSwitched
             resume_invalidated = [bool]$resumeInvalidated
             replan_required = [bool]$replanRequired
+            pool = $poolName
+            slot_wait_sec = [double]$slotWaitedSec
             usage = $usageSummary
         }
     }
@@ -1102,9 +1157,11 @@ if (-not $DryRun -and @($finalStatusTargets).Count -gt 0) {
         invocation_id = $invocationId
         model = $modelId
         channel = $channel
+        pool = $poolName
         effort = $Effort
         attempt = [int]$attempts
         phase = $finalPhase
+        slot_wait_sec = [double]$slotWaitedSec
         exit = [int]$exitCode
         session_id = $capture.session_id
         proxy = $proxyUrl
@@ -1144,6 +1201,8 @@ $finalResult = @{
     status_file = $reportedStatusFile
     events_file = $eventsLogPath
     context_files_count = [int]$contextFilesList.Count
+    pool = $poolName
+    slot_wait_sec = [double]$slotWaitedSec
     usage = $usageSummary
 }
 foreach ($key in $dryData.Keys) { $finalResult[$key] = $dryData[$key] }

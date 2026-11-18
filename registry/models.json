@@ -402,7 +402,12 @@
                                                                              "copywriting",
                                                                              "architecture"
                                                                          ]
-                                           }
+                                           },
+                   "pool_concurrency_limits":  {
+                                                   "codex_openai":  2,
+                                                   "agy_anthropic":  2,
+                                                   "agy_google":  6
+                                               }
                },
     "models":  [
                    {
@@ -1283,6 +1288,6 @@
                     "best-knowledge":  "gemini-4-carbon",
                     "best-aesthetic":  "claude-opus-5-5"
                 },
-    "registry_rev":  8,
-    "updated":  "2026-11-18T10:30:00.0000000Z"
+    "registry_rev":  9,
+    "updated":  "2026-11-18T11:25:00.0000000Z"
 }

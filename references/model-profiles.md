@@ -1,7 +1,7 @@
 # 主力模型优缺点与口碑档案（Model Profiles）
 
 <!-- AUTO:ROSTER:START -->
-> 自动同步自 `registry/models.json` (`registry_rev: 8`, 活跃模型: 4)
+> 自动同步自 `registry/models.json` (`registry_rev: 9`, 活跃模型: 4)
 
 | 模型 | ID / 通道 | 默认档位 | 顶级长板（>=9） | 额度 (`quota_rank`) | 速度 (`speed_rank`) | 运行特性 |
 |---|---|---|---|---|---|---|
@@ -12,6 +12,7 @@
 
 - **可用额度排序（低 → 高）**: Claude Opus 5.5 (`claude-opus-5-5`) < GPT-6.2 Astra (`gpt-6.2-astra`) < Gemini 4 Carbon (`gemini-4-carbon`) < Gemini 4 Hydrogen (`gemini-4-hydrogen`)
 - **响应速度排序（快 → 慢）**: Gemini 4 Hydrogen (`gemini-4-hydrogen`) > Claude Opus 5.5 (`claude-opus-5-5`) > Gemini 4 Carbon (`gemini-4-carbon`) > GPT-6.2 Astra (`gpt-6.2-astra`)
+- **通道池并发上限 (`pool_concurrency_limits`)**: `codex_openai` <= 2, `agy_anthropic` <= 2, `agy_google` <= 6
 <!-- AUTO:ROSTER:END -->
 
 ### 标准别名与典型路由速查

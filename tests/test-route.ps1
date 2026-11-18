@@ -35,7 +35,9 @@ function Invoke-RTest {
         [string]$ModeName = 'balanced',
         [string]$HostModel = '',
         [switch]$Escalate,
-        [string]$Excluded = ''
+        [string]$Excluded = '',
+        [string]$BusyAgents = '',
+        [switch]$PreferIdle
     )
     $arguments = @(
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
@@ -48,6 +50,8 @@ function Invoke-RTest {
     if (-not [string]::IsNullOrWhiteSpace($HostModel)) { $arguments += @('-HostModel', $HostModel) }
     if ($Escalate) { $arguments += '-AllowEscalation' }
     if ($Excluded.Length -gt 0) { $arguments += @('-Exclude', $Excluded) }
+    if ($BusyAgents.Length -gt 0) { $arguments += @('-BusyAgents', $BusyAgents) }
+    if ($PreferIdle) { $arguments += '-PreferIdle' }
     $execution = Invoke-OrchestraProcess -FilePath $engine `
         -Arguments $arguments -WorkDir $temp -TimeoutSec 60 -CaptureStdout
     $lines = @($execution.stdout | Where-Object {
@@ -881,6 +885,97 @@ try {
             $hCarbSelfReview.Result.self_review -eq $true -and
             $hCarbSelfReview.Result.orchestration.active_verifier -eq $false
         ) 'hydrogen_max avoids 4H self-review when aesthetic gate falls back and sets active_verifier false on self-review or blocked'
+
+        # 11. Multi-pool concurrency load balancing (-BusyAgents, -PreferIdle, pool_load, scale_out_hint, parallel_lanes, live Slots)
+        Set-RTestExhaustion
+        Set-OrchestraProperty $hostPolicy 'pool_concurrency_limits' ([pscustomobject]@{
+            codex_openai = 2
+            agy_anthropic = 2
+            agy_google = 6
+        })
+        Set-OrchestraProperty $hostPolicy 'default_mode' 'peak'
+        Save-RTestFixture $hostRegistry
+
+        $pFront = Invoke-RTest 'frontend,landing_page' -ModeName '' -HostModel 'orchestrator'
+        $pFrontLanes = @($pFront.Result.orchestration.parallel_lanes)
+        $pFrontPrim = @($pFrontLanes | Where-Object { $_.lane -eq 'critical_primary' }) | Select-Object -First 1
+        $pFrontCodex = @($pFrontLanes | Where-Object { $_.role -eq 'parallel_assets_or_contract' }) | Select-Object -First 1
+        $pFrontAes = @($pFrontLanes | Where-Object { $_.role -eq 'aesthetic_gate_tokens_and_viewport' }) | Select-Object -First 1
+        Assert-RTest (
+            $pFront.Exit -eq 0 -and
+            $pFront.Result.orchestration.pool_load.total_active -eq 0 -and
+            $pFront.Result.orchestration.pool_load.underutilized -eq $true -and
+            $pFront.Result.orchestration.pool_load.pools.codex_openai.limit -eq 2 -and
+            $pFront.Result.orchestration.pool_load.pools.agy_anthropic.limit -eq 2 -and
+            $pFront.Result.orchestration.pool_load.pools.agy_google.limit -eq 6 -and
+            ($pFront.Result.orchestration.scale_out_hint -like 'underutilized_capacity:*') -and
+            $null -ne $pFrontPrim -and $pFrontPrim.model -eq 'syn-fast' -and $pFrontPrim.pool -eq 'agy_google' -and
+            $null -ne $pFrontCodex -and $pFrontCodex.model -eq 'syn-rigor' -and $pFrontCodex.pool -eq 'codex_openai' -and
+            $null -ne $pFrontAes -and $pFrontAes.model -eq 'syn-aesthetic' -and $pFrontAes.pool -eq 'agy_anthropic'
+        ) 'frontend orchestrator emits pool_load, underutilized scale_out_hint, and 3-pool parallel_lanes'
+
+        $pBug = Invoke-RTest 'bugfix' -ModeName 'peak'
+        $pBugLanes = @($pBug.Result.orchestration.parallel_lanes)
+        $pBugPrim = @($pBugLanes | Where-Object { $_.lane -eq 'critical_primary' }) | Select-Object -First 1
+        $pBugFast = @($pBugLanes | Where-Object { $_.role -eq 'parallel_disjoint_tests_and_recon' }) | Select-Object -First 1
+        $pBugRev = @($pBugLanes | Where-Object { $_.timing -eq 'T1_micro_slice_TDM_delta_review' }) | Select-Object -First 1
+        Assert-RTest (
+            $pBug.Exit -eq 0 -and
+            $null -ne $pBugPrim -and $pBugPrim.model -eq 'syn-rigor' -and $pBugPrim.timing -eq 'T0_immediate_LPT' -and
+            $null -ne $pBugFast -and $pBugFast.model -eq 'syn-fast' -and $pBugFast.pool -eq 'agy_google' -and
+            $null -ne $pBugRev -and $pBugRev.model -eq 'syn-prose' -and ($pBugRev.scope -match 'tie-break')
+        ) 'backend/bugfix emits LPT critical_primary, parallel fast Google tests lane, and TDM delta review lane'
+
+        $pSatNoPref = Invoke-RTest 'bugfix' -ModeName 'peak' -BusyAgents 'syn-rigor,syn-rigor'
+        $pSatBug = Invoke-RTest 'bugfix' -ModeName 'peak' -BusyAgents 'syn-rigor,syn-rigor' -PreferIdle
+        $pSatMath = Invoke-RTest 'math' -ModeName 'peak' -BusyAgents 'syn-rigor,syn-rigor' -PreferIdle
+        Assert-RTest (
+            $pSatNoPref.Exit -eq 0 -and
+            $pSatNoPref.Result.primary -eq 'syn-rigor' -and
+            $pSatNoPref.Result.orchestration.pool_load.total_active -eq 2 -and
+            $pSatNoPref.Result.orchestration.pool_load.underutilized -eq $false -and
+            $pSatNoPref.Result.orchestration.pool_load.pools.codex_openai.available -eq 0 -and
+            ($pSatNoPref.Result.orchestration.scale_out_hint -like 'codex_pool_saturated:*') -and
+            $pSatBug.Exit -eq 0 -and
+            $pSatBug.Result.primary -eq 'syn-prose' -and
+            $pSatBug.Result.reviewer -eq 'syn-aesthetic' -and
+            (($pSatBug.Result.reasons -join ' ') -match 'load_balance: shifted primary from saturated pool to idle pool') -and
+            $pSatMath.Exit -eq 0 -and
+            $pSatMath.Result.primary -eq 'syn-rigor'
+        ) 'BusyAgents + PreferIdle shifts non-min_cap bugfix off saturated codex_openai while preserving math min_cap=9'
+
+        $slotLease1 = $null
+        $slotLease2 = $null
+        try {
+            $slotLease1 = Acquire-OrchestraPoolSlot -Paths $script:routePaths -Pool 'codex_openai' -Limit 2 -InvocationId 'route-slot-1' -ModelId 'syn-rigor' -Channel 'codex' -NoWait
+            $slotLease2 = Acquire-OrchestraPoolSlot -Paths $script:routePaths -Pool 'codex_openai' -Limit 2 -InvocationId 'route-slot-2' -ModelId 'syn-rigor' -Channel 'codex' -NoWait
+            $pLiveSlot = Invoke-RTest 'bugfix' -ModeName 'peak' -PreferIdle
+            Assert-RTest (
+                $pLiveSlot.Exit -eq 0 -and
+                $pLiveSlot.Result.orchestration.pool_load.pools.codex_openai.active -eq 2 -and
+                $pLiveSlot.Result.orchestration.pool_load.pools.codex_openai.available -eq 0 -and
+                ($pLiveSlot.Result.orchestration.scale_out_hint -like 'codex_pool_saturated:*') -and
+                $pLiveSlot.Result.primary -eq 'syn-prose'
+            ) 'live Slots lease saturation triggers PreferIdle load balance without BusyAgents'
+        }
+        finally {
+            if ($null -ne $slotLease1) {
+                Release-OrchestraPoolSlot -Paths $script:routePaths -LeasePath $slotLease1.lease_path -InvocationId 'route-slot-1'
+            }
+            if ($null -ne $slotLease2) {
+                Release-OrchestraPoolSlot -Paths $script:routePaths -LeasePath $slotLease2.lease_path -InvocationId 'route-slot-2'
+            }
+        }
+
+        $noFastRegistry = Copy-RTestFixture $hostRegistry
+        Set-OrchestraProperty $noFastRegistry 'models' @($noFastRegistry.models | Where-Object { [string]$_.id -ne 'syn-fast' })
+        Save-RTestFixture $noFastRegistry
+        $pNoFastShift = Invoke-RTest 'bugfix' -ModeName 'carbon_peak' -BusyAgents 'syn-rigor,syn-rigor' -PreferIdle
+        Assert-RTest (
+            $pNoFastShift.Exit -eq 0 -and
+            $pNoFastShift.Result.primary -eq 'syn-prose' -and
+            $pNoFastShift.Result.reviewer -eq 'syn-aesthetic'
+        ) 'PreferIdle in carbon_peak handles missing fast workhorse ($fastToId=$null) without StrictMode crash'
     }
     finally {
         Save-RTestFixture $fixture

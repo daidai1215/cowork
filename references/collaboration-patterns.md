@@ -193,6 +193,32 @@
 
 ---
 
+## 10. Multi-Pool Load Balancing, LPT Scheduling & SDM/TDM Slicing Protocol（多池负载均衡、LPT 调度与空分/时分切片协议）
+
+为消除单池空跑与串行等待，在 `registry/models.json` (`policy.pool_concurrency_limits`)、`scripts/lib/common.ps1`、`scripts/route.ps1`、`scripts/invoke-model.ps1` 与 `scripts/pack-context.ps1` 中建立实时三池信号灯与空分/时分流水线：
+
+1. **三池实时并发槽位与自适应自愈（`$HOME\.cowork\slots\*.json`）**：
+   - 默认配额上限：`agy_google`（4H / Carbon）=`6` 槽、`codex_openai`（GPT-6.2 Astra）=`2` 槽（严防 Cockpit 切号踩踏）、`agy_anthropic`（Claude Opus 5.5）=`2` 槽。
+   - 每次通过 `invoke-model.ps1` 发起调用时自动申请目标池槽位（死进程 PID 或超 `7200s` 陈旧租约自动回收；`doctor.ps1` 增加 `slot_hygiene` 检查，传 `-Repair` 主动清理陈旧租约）。
+   - **排队与首包计时分离（`-SlotWaitSec` / `-NoSlotWait`）**：默认 `-SlotWaitSec 300`，若目标池满槽则在启动子进程前进入 `queued_slot` 阶段等待（实时写 `status_file` 并在输出与 `usage.jsonl` 上报 `pool` 与 `slot_wait_sec`）；若传 `-NoSlotWait` 或超时则立即以退出码 `5`（`ORCHESTRA_LOCK_TIMEOUT`）快速失败。**Codex 首包握手计时器（`-ConnectTimeoutSec`）在成功获得槽位之后才开始计时**，不会因排队而误杀。
+2. **多池感知路由与负载均衡（`route.ps1 -BusyAgents -PreferIdle`）**：
+   - `-BusyAgents <模型ID或池名,...>`：在实时 `Slots` 租约之上叠加当前 Swarm/在途占用的模型或池名（`codex_openai` / `agy_anthropic` / `agy_google`），返回 `orchestration.pool_load`（`total_active`、`underutilized = ($total_active -lt 2)` 及三池 `active / limit / available`）与 `orchestration.scale_out_hint`。
+   - `-PreferIdle`：当首选模型所在池已饱和（`available <= 0`）时，在**严格守住 `min_cap`、`primary_disabled` 与 `hard_rules` 不破防**的前提下，自动从同能力达标池中切至拥有空闲槽位的候选模型；非强锁的 `reviewer` 与 `co_drafter` 也优先回避饱和池。
+3. **LPT 慢关键路径优先 + 跨三池并发（`orchestration.parallel_lanes`）**：
+   - 当活跃子智能体 `< 2`（`underutilized=true`）时，严禁单线程只跑一个池，应主动参考 `route.ps1` 返回的 `orchestration.parallel_lanes` 同步拉开无冲突旁路：
+     - **`T=0` LPT 先发慢关键路径**：立即优先拉起耗时最长的 `GPT-6.2 Astra` 主攻（后端/数学/疑难 Bug/生图/核心契约），或前端场景并行启动 Astra 契约/资产验证；
+     - **`T=0` 同步拉起 Google 池旁路**：同步派 `4H Extra`（`gemini-4-hydrogen-xhigh`）写互斥路径分片、生成 `tests/` 或由 `4H High` 打包 `<scratch>/context_pack.md`；
+     - **`T=1` 重叠流水线把关**：首片/截图就绪立即并行派 `Claude Opus 5.5` 做多视口截图 Aesthetic Gate 或双方案 `<= 800` 字终裁。
+4. **空分复用（SDM：Space-Division Multiplexing）**：
+   - **物理写入隔离**：Swarm Worker 分配互斥 `workspace:"share"` 与路径前缀，外部写盘统一过 `extract-files.ps1 -AllowedPrefixes ... -ForbiddenPrefixes ...`。
+   - **热缓存 Work-Stealing**：优先 `@` 唤醒处于 `waiting` 状态的 Swarm 空闲小工（0 token 待命且自带热 KV 上下文）认领闲置分片或补测，不重复 `kill` + `add`。
+5. **时分切片与增量审稿流（TDM + `scripts/pack-context.ps1`）**：
+   - 将长实现拆为微切片，按 `写（Slice N+1） -> 审（Slice N） -> 修` 三拍重叠推进。
+   - **静态打包锁缓存**：`pack-context.ps1 -WorkDir <d> -Files <f1,f2> -OutFile <scratch>/context_pack.md [-MaxLinesPerFile 400]` 按确定顺序去 BOM、统一 `\n` 并截断超长文件，搭配 `invoke-model.ps1 -ContextFiles` 置顶锁死前缀 KV 缓存。
+   - **增量 Diff 送审（先过本地快筛再送外部旗舰）**：修改后先在本地跑完语法/单测快筛（日志落盘 `<scratch>/test.log`），再用 `pack-context.ps1 -WorkDir <d> -GitDiff [-BaseRef <ref>] [-AllowedPrefixes <p>] -TestLogFile <scratch>/test.log -OutFile <scratch>/delta_review.md [-MaxLogTailLines 20]` 仅打包 `git status --short`、`git diff --unified=3` 与末尾 `<= 20` 行测试摘要送给 Astra/Opus 二审。
+
+---
+
 ## 提示词与契约模板
 
 ### A. `<scratch>/plan_contract.md` 标准契约模板（只读立项产出）
