@@ -1,5 +1,11 @@
 # Cowork changelog
 
+## 2026-11-18T14:32:00.0000000Z - CLI cold-boot slimming (Codex pure-brain `--ignore-user-config --ignore-rules` & `--ephemeral`, direct `agy.exe --disable-slash-commands`) and `4H medium` ultra-fast tier
+- registry_rev: 11 -> 12
+- added `policy.ultra_fast_tags: ["scan"]` routing pure `scan` workhorse tasks to `medium` (`gemini-4-hydrogen-medium`), while `bulk`/`boilerplate`/`test_gen` stay `high` and general tasks stay `xhigh`
+- updated `invoke-model.ps1` with Codex pure-brain slimming (`--ignore-user-config --ignore-rules` + essential scalar `-c`), `--ephemeral` auto-enabled on `-AutoRecordOk` without `-Resume`, direct `agy.exe --disable-slash-commands`, and `-InvocationId` auto-recording
+- backup: registry/history/models-20261118-222500-11-pre12.json
+
 ## 2026-11-18T13:42:00.0000000Z - Fast-Plan Exemption Gate (`plan_external_min_unread_files = 5`), inline `response` without `-OutFile`, and `-AutoRecordOk`
 - registry_rev: 10 -> 11
 - added `policy.plan_external_min_unread_files = 5` (exempts in-context / `< 5` unread-file Plan Mode turns from external `/swarm` or `Astra` round-trips)

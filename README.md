@@ -1,11 +1,11 @@
 # cowork
 
-多模型协同总调度 Skill（面向 **Antigravity (`agy`)**、**OpenAI Codex CLI (`codex`)** 与 **`/swarm` 多智能体编排**共享）。默认以**极致性能（`peak` 模式零额度扣分）**为第一目标，内置 **Orchestrator Fast-Plan 免空转门禁（`<5` 未读文件 0 外调）与执行期双开 `/swarm` + `/cowork` 全局插件（`cowork-orchestrator`）**、**三档主控感知自动分层（`-HostModel orchestrator|carbon|hydrogen` → `orchestrator_fast` / `carbon_peak` / `hydrogen_max`）**、**单点 Swarm `gatekeeper`** 以及 **Context & KV Prefix Cache 静态前缀锁定与静默事件流协议**。
+多模型协同总调度 Skill（面向 **Antigravity (`agy`)**、**OpenAI Codex CLI (`codex`)** 与 **`/swarm` 多智能体编排**共享）。默认以**极致性能（`peak` 模式零额度扣分）**为第一目标，内置 **Orchestrator Fast-Plan 免空转门禁（`<5` 未读文件 0 外调）与执行期双开 `/swarm` + `/cowork` 全局插件（`cowork-orchestrator`）**、**三档主控感知自动分层（`-HostModel orchestrator|carbon|hydrogen` → `orchestrator_fast` / `carbon_peak` / `hydrogen_max`）**、**CLI 冷启瘦身（Codex `--ignore-user-config --ignore-rules --ephemeral` 与 `agy.exe --disable-slash-commands`）与 4H `medium/high/xhigh` 三档算力**、**单点 Swarm `gatekeeper`** 以及 **Context & KV Prefix Cache 静态前缀锁定与静默事件流协议**。
 
 ## 当前主力阵容（默认 `peak` 极致性能 / 三档主控感知分层）
 
 <!-- AUTO:ROSTER:START -->
-> 自动同步自 `registry/models.json` (`registry_rev: 11`, 活跃模型: 4)
+> 自动同步自 `registry/models.json` (`registry_rev: 12`, 活跃模型: 4)
 
 | 模型 | ID / 通道 | 默认档位 | 顶级长板（>=9） | 额度 (`quota_rank`) | 速度 (`speed_rank`) | 运行特性 |
 |---|---|---|---|---|---|---|
@@ -47,7 +47,7 @@
 | 常规后端 / Bugfix | `bugfix` | `gpt-6.2-astra` (`high`) | `gemini-4-hydrogen` (`xhigh`) | - |
 | 数学 / 算法验算 | `math,algorithm` | `gpt-6.2-astra` (`xhigh`) | `gemini-4-carbon` (`high`) | - |
 
-- **主控感知三档自动分层 (`-HostModel orchestrator|carbon|hydrogen`)**: 依据主控环境自动切换 `orchestrator_fast` / `carbon_peak` / `hydrogen_max` (在 `bulk`/`boilerplate`/`scan`/`test_gen` 自动降为 `high` 提速，其余保持 `xhigh`):
+- **主控感知三档自动分层 (`-HostModel orchestrator|carbon|hydrogen`)**: 依据主控环境自动切换 `orchestrator_fast` / `carbon_peak` / `hydrogen_max` (4H: `scan` -> `medium`, `bulk`/`boilerplate`/`test_gen` -> `high`, 其余 -> `xhigh`):
 
 | 主控模式 (`-HostModel`) | 典型场景 | `-Tags` | 主执行 (`primary`) | 审查 (`reviewer`) | 终审 (`final_reviewer`) |
 |---|---|---|---|---|---|
@@ -82,7 +82,7 @@ cowork/
 ├── scripts/
 │   ├── setup.ps1                     # 安装引导、阵容切换与 cowork-orchestrator 全局插件同步（支持 -SkipGlobalPlugin）
 │   ├── route.ps1                     # 按标签、-HostModel（三档主控感知）、-BusyAgents/-PreferIdle 与 parallel_lanes 自动派工
-│   ├── invoke-model.ps1              # 统一跨通道调用入口（无 -OutFile 内联 response、-AutoRecordOk、三池并发槽位排队、-ContextFiles 置顶缓存、静默 .events.jsonl、cached_tokens 遥测、Cockpit 切号自愈）
+│   ├── invoke-model.ps1              # 统一跨通道调用入口（CLI 冷启瘦身、4H 三档算力、无 -OutFile 内联 response、-AutoRecordOk、三池槽位排队、-ContextFiles 置顶缓存、静默 .events.jsonl、cached_tokens 遥测、Cockpit 切号自愈）
 │   ├── pack-context.ps1              # 静态上下文打包与 -GitDiff + -TestLogFile (<=20行) 增量审稿打包器
 │   ├── detect-models.ps1             # 自动扫描 agy 与 Codex 目录发现新模型 / 离线模型
 │   ├── research-prompt.ps1           # 生成新模型联网调研提示词（带防并发租约）
@@ -108,13 +108,14 @@ cowork/
    - **Plan Mode 免空转（`policy.plan_external_min_unread_files = 5`，硬限 `<= 1` 轮）**：上下文已备或新读本地文件 `< 5` 个时 **0 外调**（严禁拉起 `/swarm` 或外调 `Astra`），Carbon 单轮直出计划或 `exit_plan_mode`；仅 `>= 5` 未读文件（未知大仓/硬核证明）限 `1` 轮同步聚合外调——省略 `-OutFile` 直读内联 JSON `.response`（超 `64KB` 自动溢写 `.response.md` 并设 `response_truncated=true`）+ `-AutoRecordOk` 一步记账（`outcome_recorded="ok"`），严禁挂 `schedule 35s` 看门狗、读取 `.events.jsonl` 或另跑 `record-outcome.ps1`。
 2. **三档主控感知自动分层（`route.ps1 -HostModel orchestrator|carbon|hydrogen`）**：
    - `orchestrator_fast` (`-HostModel orchestrator`)：约 80%+ 原 Carbon 负载下放 `4H Extra`，Carbon 留守架构、`paper/essay/copywriting`、`math/algorithm` 复核；
-   - `carbon_peak` (`-HostModel carbon`)：Carbon 保持主力，仅大量机械/扫描/样板任务（`bulk/boilerplate/scan/test_gen`）自动分流至 `4H` **`high`** 档提速；
-   - `hydrogen_max` (`-HostModel hydrogen`)：Gemini 侧 100% 由 `4H` 执行（推理/编码 `xhigh`、机械 `high`），仅 `paper/essay/copywriting/architecture` 或 `-AllowEscalation` 触发 `final_reviewer = gemini-4-carbon` 终审。
+   - `carbon_peak` (`-HostModel carbon`)：Carbon 保持主力，仅纯 `scan` 分流 `4H` **`medium`**、批量机械/样板任务（`bulk/boilerplate/test_gen`）分流 `4H` **`high`** 提速；
+   - `hydrogen_max` (`-HostModel hydrogen`)：Gemini 侧 100% 由 `4H` 执行（纯 `scan` `medium`、机械 `high`、推理/编码 `xhigh`），仅 `paper/essay/copywriting/architecture` 或 `-AllowEscalation` 触发 `final_reviewer = gemini-4-carbon` 终审。
 3. **Antigravity 共享池认知 & 单点 Swarm `gatekeeper`**：
    - **Gemini 共享池**：`Carbon` 与 `4H` 同属 Antigravity Gemini 池，分流 `4H` 主要换取 **2.5 倍吞吐速度与低延迟**；**Claude 独立稀缺池**：`Opus 5.5` 只审截图 Aesthetic Gate 或 ≤ 800 字终裁，严禁主写或整池开 Worker；**Codex 外部池**：`GPT-6.2 Astra` 走独立 Codex + Cockpit 自动切号，不耗 Antigravity 配额；
    - `/swarm` 中通过 **1 名单点 `gatekeeper`（`rigor-gate`）** 集中调 `gpt-6.2-astra`（官方直连平时可并发 `<= 4` 路，AIMD 遇 429/切号锁自动 `15s` 收口 1 槽保护、接通即弹回 `4` 槽）与 `claude-opus-5-5`（`<= 3` 路并行审图/终裁）。
-4. **Context & KV Prefix Cache Protocol**：
-   - **静态包前置**：多文件任务先用 `4H High` 生成 `<scratch>/context_pack.md`，调用 `invoke-model.ps1` 时传 `-ContextFiles` 将其固定置顶于 `=====TASK_INSTRUCTIONS=====` 之前，吃满前缀 KV 缓存；
+4. **Context & KV Prefix Cache Protocol + CLI 冷启瘦身**：
+   - **静态包前置**：多文件任务先用 `4H Medium`（`-Tags scan`）生成 `<scratch>/context_pack.md`，调用 `invoke-model.ps1` 时传 `-ContextFiles` 将其固定置顶于 `=====TASK_INSTRUCTIONS=====` 之前，吃满前缀 KV 缓存；
+   - **CLI 冷启瘦身默认开启**：Codex 纯推理快道默认 `--ignore-user-config --ignore-rules` + 标量 `-c` 透传（保 OAuth `auth.json` 与优先级通道，覆盖传 `-FullCodexConfig`），`-Ephemeral` 或无 `-Resume` 配 `-AutoRecordOk` 自动加 `--ephemeral` 并按 `-InvocationId` 记账（保留会话传 `-KeepSession`）；agy 优先直连 `agy.exe --disable-slash-commands`（跳过 PS 包装冷启并继承代理 + `NODE_USE_ENV_PROXY=1`，恢复传 `-EnableAgySlashCommands`）；
    - **默认静默 stdout 与遥测**：`invoke-model.ps1` 默认静默不打印中间流 JSON（完整事件写 `$HOME\.cowork\live\<id>.events.jsonl`，7 天清理；仅排障加 `-StreamStdout`），并在 `usage` / `usage.jsonl` 采集 `cached_tokens` 与 `cache_hit_rate`；
    - **`-Resume` 边界、Swarm 复用与日志节流**：仅单路串行窄域续问用 `-Resume`，**并发 Worker/子会话严禁共享同一 `-Resume`**（独立 Verifier / 并行分片 / 切号后统一开新会话 + 共享 `-ContextFiles`）；Swarm 同探索前缀用 `fork` 吃热缓存，可复用 Worker 留 `waiting`（0 耗），按 `#seq` 与单向 `@peer` 隔离看板；长测试输出写日志只摘 `<= 20` 行入主对话。
 5. **多池负载均衡、LPT 调度与 SDM/TDM 切片**：

@@ -8,11 +8,14 @@ $script:Failures = New-Object 'System.Collections.Generic.List[string]'
 $sandbox = $null
 $parentDirectory = $null
 $environmentNames = @(
-    'MODEL_ORCHESTRA_AGY_WRAPPER', 'MODEL_ORCHESTRA_NOW',
+    'MODEL_ORCHESTRA_AGY_WRAPPER', 'MODEL_ORCHESTRA_AGY_EXE', 'AGY_EXEC_BIN',
+    'MODEL_ORCHESTRA_NOW',
     'MODEL_ORCHESTRA_CODEX', 'MODEL_ORCHESTRA_CODEX_HOME',
     'MODEL_ORCHESTRA_ROTATION_WAIT_MS', 'MODEL_ORCHESTRA_PROXY',
     'MODEL_ORCHESTRA_SKIP_PROXY_PRECHECK', 'MODEL_ORCHESTRA_FAKE_ALIVE_PIDS',
-    'MODEL_ORCHESTRA_TEST_STAGGER_MS'
+    'MODEL_ORCHESTRA_TEST_STAGGER_MS',
+    'HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy',
+    'ALL_PROXY', 'all_proxy', 'NODE_USE_ENV_PROXY'
 )
 $savedEnvironment = @{}
 foreach ($name in $environmentNames) {
@@ -206,7 +209,7 @@ try {
         redo_window_days = 30; promote_after_ok = 3
         promote_min_distinct_tags = 2; promote_max_bad = 1
         promote_min_confidence = 0.6; reject_after_consecutive_fail = 2
-        exhausted_hours = 5
+        exhausted_hours = 5; ultra_fast_tags = @()
     }
     foreach ($key in $testPolicy.Keys) {
         Set-OrchestraProperty $policy $key $testPolicy[$key]
@@ -267,10 +270,18 @@ try {
         }
         else {
             $modeIndex = [Array]::IndexOf($argv, '--mode')
-            Assert-Test "$id uses wrapper plan mode" (
-                $argv -contains '-File' -and $modeIndex -ge 0 -and
+            $targetOk = if ($run.json.agy_direct_exe) {
+                $run.json.executable -match 'agy(\.exe)?$' -and ($argv -notcontains '-File')
+            }
+            else {
+                $argv -contains '-File'
+            }
+            Assert-Test "$id uses agy plan mode with slash commands disabled" (
+                $targetOk -and $modeIndex -ge 0 -and
                 $argv[$modeIndex + 1] -eq 'plan' -and
-                $argv -contains ($id + '-high') -and $argv -notcontains '--sandbox'
+                $argv -contains ($id + '-high') -and $argv -notcontains '--sandbox' -and
+                $argv -contains '--disable-slash-commands' -and
+                $run.json.agy_slash_commands_disabled -eq $true
             )
         }
     }
@@ -1934,6 +1945,372 @@ exit 0
         $autoRecOutcomes[0].outcome -eq 'ok' -and
         $autoRecFailRun.code -eq 3 -and
         $null -eq $autoRecFailRun.json.outcome_recorded
+    )
+
+    # (j) Rev 12: Codex pure-brain --ignore-user-config --ignore-rules + TOML scalar overrides
+    $rev12CfgHome = Join-Path $sandbox 'rev12-codex-home'
+    [void][IO.Directory]::CreateDirectory($rev12CfgHome)
+    $rev12Toml = @'
+# Top-level scalar settings
+model_provider = "custom-proxy"
+forced_login_method = 'chatgpt'
+service_tier = "fast" # inline comment
+
+[windows]
+sandbox = "elevated"
+
+[plugins."heavy"]
+enabled = true
+model_provider = "ignored-plugin-provider"
+
+[mcp_servers.mega]
+command = "npx"
+sandbox = "ignored-mcp-sandbox"
+
+[[hooks]]
+service_tier = "ignored-hook-tier"
+'@
+    [IO.File]::WriteAllText((Join-Path $rev12CfgHome 'config.toml'), $rev12Toml, $script:OrchestraUtf8)
+    $parsedCfg = Get-CodexEssentialConfigOverrides -CodexHome $rev12CfgHome
+    $prevCodexHomeForCfg = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME')
+    $cfgDryRun = $null
+    try {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME', $rev12CfgHome)
+        $cfgDryRun = Invoke-TestScript -Script $invokeScript -Arguments (
+            $baseArguments + @('-Model', 'gpt-6-astra', '-Prompt', 'TEST', '-DryRun')
+        )
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME', $prevCodexHomeForCfg)
+    }
+    $cfgDryArgv = @($cfgDryRun.json.arguments)
+    $ignoreCfgIdx = [Array]::IndexOf($cfgDryArgv, '--ignore-user-config')
+    $ignoreRulesIdx = [Array]::IndexOf($cfgDryArgv, '--ignore-rules')
+    $cDirIdx = [Array]::IndexOf($cfgDryArgv, '-C')
+    Assert-Test 'Codex pure-brain extracts scalar config.toml overrides, ignores plugins/MCP/auth.json, and passes --ignore-user-config --ignore-rules' (
+        $parsedCfg.model_provider -eq 'custom-proxy' -and
+        $parsedCfg.forced_login_method -eq 'chatgpt' -and
+        $parsedCfg.service_tier -eq 'fast' -and
+        $parsedCfg.windows_sandbox -eq 'elevated' -and
+        $cfgDryRun.code -eq 0 -and
+        $cfgDryRun.json.codex_fast_config -eq $true -and
+        $ignoreCfgIdx -ge 0 -and $ignoreRulesIdx -gt $ignoreCfgIdx -and $cDirIdx -gt $ignoreRulesIdx -and
+        ($cfgDryArgv -contains 'model_provider="custom-proxy"') -and
+        ($cfgDryArgv -contains 'forced_login_method="chatgpt"') -and
+        ($cfgDryArgv -contains 'service_tier="fast"') -and
+        ($cfgDryArgv -contains 'windows.sandbox="elevated"') -and
+        ($cfgDryArgv -contains 'shell_tool') -and
+        ($cfgDryArgv -contains 'unified_exec') -and
+        (-not ($cfgDryArgv -match 'plugins|mcp_servers|ignored-'))
+    )
+
+    # (k) Rev 12: -AllowCodexShell, -Tags image_gen, and -FullCodexConfig suppress codex_fast_config
+    $suppShellRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gpt-6-astra', '-AllowCodexShell', '-Prompt', 'TEST', '-DryRun')
+    )
+    $suppImgRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gpt-6-astra', '-Tags', 'image_gen', '-Prompt', 'TEST', '-DryRun')
+    )
+    $suppFullRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gpt-6-astra', '-FullCodexConfig', '-Prompt', 'TEST', '-DryRun')
+    )
+    Assert-Test '-AllowCodexShell, -Tags image_gen, and -FullCodexConfig suppress codex_fast_config' (
+        $suppShellRun.code -eq 0 -and $suppShellRun.json.codex_fast_config -eq $false -and
+        (@($suppShellRun.json.arguments) -notcontains '--ignore-user-config') -and
+        (@($suppShellRun.json.arguments) -notcontains '--ignore-rules') -and
+        $suppImgRun.code -eq 0 -and $suppImgRun.json.codex_fast_config -eq $false -and
+        (@($suppImgRun.json.arguments) -notcontains '--ignore-user-config') -and
+        (@($suppImgRun.json.arguments) -notcontains '--ignore-rules') -and
+        $suppFullRun.code -eq 0 -and $suppFullRun.json.codex_fast_config -eq $false -and
+        $suppFullRun.json.codex_shell_enabled -eq $false -and
+        (@($suppFullRun.json.arguments) -contains 'shell_tool') -and
+        (@($suppFullRun.json.arguments) -notcontains '--ignore-user-config') -and
+        (@($suppFullRun.json.arguments) -notcontains '--ignore-rules')
+    )
+
+    # (l) Rev 12: -Ephemeral, -AutoRecordOk --ephemeral, -KeepSession, conflicts, and -AutoRecordOk on null session_id
+    $ephPlainRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gpt-6-astra', '-Prompt', 'TEST', '-DryRun')
+    )
+    $ephFlagRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gpt-6-astra', '-Ephemeral', '-Prompt', 'TEST', '-DryRun')
+    )
+    $ephAutoRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gpt-6-astra', '-AutoRecordOk', '-Prompt', 'TEST', '-DryRun')
+    )
+    $ephKeepRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gpt-6-astra', '-AutoRecordOk', '-KeepSession', '-Prompt', 'TEST', '-DryRun')
+    )
+    $ephResumeAutoRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gpt-6-astra', '-AutoRecordOk', '-Resume', 'sess-123', '-Prompt', 'TEST', '-DryRun')
+    )
+    $ephBadResume = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gpt-6-astra', '-Ephemeral', '-Resume', 'sess-123', '-Prompt', 'TEST', '-DryRun')
+    )
+    $ephBadKeep = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gpt-6-astra', '-Ephemeral', '-KeepSession', '-Prompt', 'TEST', '-DryRun')
+    )
+    Assert-Test 'Codex ephemeral flag activates on -Ephemeral or non-resumed -AutoRecordOk, respects -KeepSession, and rejects conflicts' (
+        $ephPlainRun.code -eq 0 -and $ephPlainRun.json.codex_ephemeral -eq $false -and
+        (@($ephPlainRun.json.arguments) -notcontains '--ephemeral') -and
+        $ephFlagRun.code -eq 0 -and $ephFlagRun.json.codex_ephemeral -eq $true -and
+        (@($ephFlagRun.json.arguments) -contains '--ephemeral') -and
+        $ephAutoRun.code -eq 0 -and $ephAutoRun.json.codex_ephemeral -eq $true -and
+        (@($ephAutoRun.json.arguments) -contains '--ephemeral') -and
+        $ephKeepRun.code -eq 0 -and $ephKeepRun.json.codex_ephemeral -eq $false -and
+        (@($ephKeepRun.json.arguments) -notcontains '--ephemeral') -and
+        $ephResumeAutoRun.code -eq 0 -and $ephResumeAutoRun.json.codex_ephemeral -eq $false -and
+        (@($ephResumeAutoRun.json.arguments) -notcontains '--ephemeral') -and
+        $ephBadResume.code -eq 2 -and
+        $ephBadKeep.code -eq 2
+    )
+
+    $noInitAutoState = Join-Path $sandbox 'rev12-noinit-state'
+    $noInitAutoPaths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir $noInitAutoState
+    $prevWrapperForNoInit = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_AGY_WRAPPER')
+    $noInitAutoRun = $null
+    try {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_AGY_WRAPPER', $wrapperPath)
+        $noInitAutoRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+            '-RegistryPath', $fixtureRegistry, '-StateDir', $noInitAutoState,
+            '-WorkDir', $sandbox, '-Model', 'gemini-4-carbon',
+            '-Prompt', 'TEST_NO_INIT', '-AutoRecordOk'
+        )
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_AGY_WRAPPER', $prevWrapperForNoInit)
+    }
+    $noInitEvents = @(Read-UsageEvents -Paths $noInitAutoPaths)
+    $noInitOutcomes = @($noInitEvents | Where-Object {
+        (Get-OrchestraProperty $_ 'type') -eq 'outcome' -and
+        (Get-OrchestraProperty $_ 'invocation_id') -eq $noInitAutoRun.json.invocation_id
+    })
+    Assert-Test '-AutoRecordOk records outcome=ok via InvocationId even when session_id is null (TEST_NO_INIT)' (
+        $noInitAutoRun.code -eq 0 -and
+        $null -eq $noInitAutoRun.json.session_id -and
+        $noInitAutoRun.json.outcome_recorded -eq 'ok' -and
+        $noInitOutcomes.Count -eq 1 -and
+        $noInitOutcomes[0].outcome -eq 'ok'
+    )
+
+    # (m) Rev 12: Direct agy.exe path resolution and -EnableAgySlashCommands toggle
+    $dummyAgyExe = Join-Path $sandbox 'agy.exe'
+    [IO.File]::WriteAllBytes($dummyAgyExe, [byte[]]@(0))
+    $prevAgyWrapper = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_AGY_WRAPPER')
+    $prevAgyExe = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_AGY_EXE')
+    $prevAgyExecBin = [Environment]::GetEnvironmentVariable('AGY_EXEC_BIN')
+    $directDefRun = $null
+    $directSlashRun = $null
+    try {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_AGY_WRAPPER', $null)
+        [Environment]::SetEnvironmentVariable('AGY_EXEC_BIN', $null)
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_AGY_EXE', $dummyAgyExe)
+        $directDefRun = Invoke-TestScript -Script $invokeScript -Arguments (
+            $baseArguments + @('-Model', 'gemini-4-carbon', '-Prompt', 'TEST', '-DryRun')
+        )
+        $directSlashRun = Invoke-TestScript -Script $invokeScript -Arguments (
+            $baseArguments + @('-Model', 'gemini-4-carbon', '-Prompt', 'TEST', '-EnableAgySlashCommands', '-DryRun')
+        )
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_AGY_WRAPPER', $prevAgyWrapper)
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_AGY_EXE', $prevAgyExe)
+        [Environment]::SetEnvironmentVariable('AGY_EXEC_BIN', $prevAgyExecBin)
+    }
+    Assert-Test 'MODEL_ORCHESTRA_AGY_EXE invokes agy.exe directly without -File and toggles --disable-slash-commands cleanly' (
+        $directDefRun.code -eq 0 -and
+        $directDefRun.json.agy_direct_exe -eq $true -and
+        $directDefRun.json.executable -ieq $dummyAgyExe -and
+        (@($directDefRun.json.arguments) -notcontains '-File') -and
+        $directDefRun.json.agy_slash_commands_disabled -eq $true -and
+        (@($directDefRun.json.arguments) -contains '--disable-slash-commands') -and
+        $directSlashRun.code -eq 0 -and
+        $directSlashRun.json.agy_direct_exe -eq $true -and
+        $directSlashRun.json.executable -ieq $dummyAgyExe -and
+        (@($directSlashRun.json.arguments) -notcontains '-File') -and
+        $directSlashRun.json.agy_slash_commands_disabled -eq $false -and
+        (@($directSlashRun.json.arguments) -notcontains '--disable-slash-commands')
+    )
+
+    # (n) Rev 12: policy.ultra_fast_tags routes 4H scan -> medium, scan+bulk -> high, bugfix -> xhigh
+    $ultraReg = Read-JsonFile -Path $fixtureRegistry
+    Set-OrchestraProperty $ultraReg.policy 'ultra_fast_tags' @('scan')
+    $ultraRegistry = Join-Path $sandbox 'registry\models-ultra.json'
+    Write-JsonAtomic -Path $ultraRegistry -Object $ultraReg
+    $ultraBase = @('-RegistryPath', $ultraRegistry, '-StateDir', $fixtureState, '-WorkDir', $sandbox)
+    $uScanRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $ultraBase + @('-Model', 'gemini-4-hydrogen', '-Tags', 'scan', '-Prompt', 'TEST', '-DryRun')
+    )
+    $uMixedRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $ultraBase + @('-Model', 'gemini-4-hydrogen', '-Tags', 'scan,bulk', '-Prompt', 'TEST', '-DryRun')
+    )
+    $uBugfixRun = Invoke-TestScript -Script $invokeScript -Arguments (
+        $ultraBase + @('-Model', 'gemini-4-hydrogen', '-Tags', 'bugfix', '-Prompt', 'TEST', '-DryRun')
+    )
+    Assert-Test 'policy.ultra_fast_tags routes 4H -Tags scan to medium, scan+bulk to high, and bugfix to xhigh' (
+        $uScanRun.code -eq 0 -and $uScanRun.json.effort -eq 'medium' -and
+        (@($uScanRun.json.arguments) -contains 'gemini-4-hydrogen-medium') -and
+        $uMixedRun.code -eq 0 -and $uMixedRun.json.effort -eq 'high' -and
+        (@($uMixedRun.json.arguments) -contains 'gemini-4-hydrogen-high') -and
+        $uBugfixRun.code -eq 0 -and $uBugfixRun.json.effort -eq 'xhigh' -and
+        (@($uBugfixRun.json.arguments) -contains 'gemini-4-hydrogen-xhigh')
+    )
+
+    # (o) Rev 12 fix: Codex pure-brain fallback on unsupported config.toml shapes and backslash/quote escaping
+    $cfgTestCases = @(
+        @{ Name = 'openai_base_url'; Toml = "openai_base_url = ""https://example.invalid/v1""" },
+        @{ Name = 'model_providers'; Toml = "[model_providers.custom]`nbase_url = ""https://example.invalid/v1""" },
+        @{ Name = 'inline_windows'; Toml = "windows = { sandbox = ""elevated"" }" },
+        @{ Name = 'bad_escape'; Toml = "service_tier = ""bad\u0041""" }
+    )
+    $prevCfgHomeFallback = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME')
+    $fallbackChecksOk = $true
+    try {
+        foreach ($cfgCase in $cfgTestCases) {
+            $caseCfgDir = Join-Path $sandbox ('rev12-fb-' + $cfgCase.Name)
+            [void][IO.Directory]::CreateDirectory($caseCfgDir)
+            [IO.File]::WriteAllText((Join-Path $caseCfgDir 'config.toml'), $cfgCase.Toml, $script:OrchestraUtf8)
+            $parsedFb = Get-CodexEssentialConfigOverrides -CodexHome $caseCfgDir
+            [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME', $caseCfgDir)
+            $fbRun = Invoke-TestScript -Script $invokeScript -Arguments (
+                $baseArguments + @('-Model', 'gpt-6-astra', '-Prompt', 'TEST', '-DryRun')
+            )
+            if (
+                $parsedFb.fast_config_supported -ne $false -or
+                $fbRun.code -ne 0 -or
+                $fbRun.json.codex_fast_config -ne $false -or
+                (@($fbRun.json.arguments) -contains '--ignore-user-config')
+            ) {
+                $fallbackChecksOk = $false
+            }
+        }
+        $escCfgDir = Join-Path $sandbox 'rev12-esc-cfg'
+        [void][IO.Directory]::CreateDirectory($escCfgDir)
+        $escToml = "model_provider = 'corp\team'`nservice_tier = 'foo\bar'"
+        [IO.File]::WriteAllText((Join-Path $escCfgDir 'config.toml'), $escToml, $script:OrchestraUtf8)
+        $parsedEsc = Get-CodexEssentialConfigOverrides -CodexHome $escCfgDir
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME', $escCfgDir)
+        $escRun = Invoke-TestScript -Script $invokeScript -Arguments (
+            $baseArguments + @('-Model', 'gpt-6-astra', '-Prompt', 'TEST', '-DryRun')
+        )
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME', $prevCfgHomeFallback)
+    }
+    Assert-Test 'Unsupported config.toml constructs fall back to full config and literal backslashes escape cleanly' (
+        $fallbackChecksOk -and
+        $parsedEsc.fast_config_supported -eq $true -and
+        $parsedEsc.model_provider -eq 'corp\team' -and
+        $parsedEsc.service_tier -eq 'foo\bar' -and
+        $escRun.code -eq 0 -and
+        $escRun.json.codex_fast_config -eq $true -and
+        (@($escRun.json.arguments) -contains 'model_provider="corp\\team"') -and
+        (@($escRun.json.arguments) -contains 'service_tier="foo\\bar"')
+    )
+
+    # (p) Rev 12 fix: Proxy URL redaction in telemetry vs unredacted child env, plus per-scheme agy proxy preservation
+    Assert-Test 'ConvertTo-RedactedProxyUrl masks credentials and leaves plain URLs intact' (
+        (ConvertTo-RedactedProxyUrl 'http://alice:secret@127.0.0.1:17901') -eq 'http://***@127.0.0.1:17901' -and
+        (ConvertTo-RedactedProxyUrl 'http://127.0.0.1:7890') -eq 'http://127.0.0.1:7890'
+    )
+    $credState = Join-Path $sandbox 'rev12-cred-state'
+    $credHome = Join-Path $sandbox 'rev12-cred-home'
+    [void][IO.Directory]::CreateDirectory($credHome)
+    [IO.File]::WriteAllBytes((Join-Path $credHome 'auth.json'), $script:OrchestraUtf8.GetBytes('{"fixture":"cred"}'))
+    $prevCodexBinCred = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_CODEX')
+    $prevCodexHomeCred = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME')
+    $prevProxyCred = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_PROXY')
+    $credRun = $null
+    try {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX', $watchdogCodexPath)
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME', $credHome)
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_PROXY', 'http://alice:secret@127.0.0.1:17901')
+        $credRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+            '-RegistryPath', $fixtureRegistry, '-StateDir', $credState,
+            '-WorkDir', $sandbox, '-Model', 'gpt-6-astra',
+            '-Prompt', 'PROXY_CRED_TEST'
+        )
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX', $prevCodexBinCred)
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME', $prevCodexHomeCred)
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_PROXY', $prevProxyCred)
+    }
+    $credStatus = Read-JsonFile -Path (Join-Path $credState 'live\latest-codex.json')
+    Assert-Test 'Credential-bearing MODEL_ORCHESTRA_PROXY is redacted in finalResult/status_file while unredacted in child env' (
+        $credRun.code -eq 0 -and
+        $credRun.json.proxy -eq 'http://***@127.0.0.1:17901' -and
+        $null -ne $credStatus -and
+        $credStatus.proxy -eq 'http://***@127.0.0.1:17901' -and
+        $credRun.json.response -match 'PROXY=http://alice:secret@127\.0\.0\.1:17901'
+    )
+
+    $agyProxyWrapper = Join-Path $sandbox 'fake agy proxy wrapper.ps1'
+    $agyProxyWrapperText = @'
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$utf8 = New-Object Text.UTF8Encoding($false)
+[Console]::OutputEncoding = $utf8
+[Console]::WriteLine('{"event":"init","conversation_id":"proxy-agy-sess","init":{"model":"mock"}}')
+$resp = "HTTP=$($env:HTTP_PROXY)|HTTPS=$($env:HTTPS_PROXY)|NODE=$($env:NODE_USE_ENV_PROXY)"
+$res = [ordered]@{ event = 'result'; result = [ordered]@{ status = 'SUCCESS'; conversation_id = 'proxy-agy-sess'; response = $resp } }
+[Console]::WriteLine(($res | ConvertTo-Json -Compress))
+exit 0
+'@
+    [IO.File]::WriteAllText($agyProxyWrapper, $agyProxyWrapperText, $script:OrchestraUtf8)
+    $agyProxyEnvState = Join-Path $sandbox 'rev12-agyproxy-state'
+    $savedProxyVars = @{}
+    foreach ($pn in @('MODEL_ORCHESTRA_AGY_WRAPPER', 'MODEL_ORCHESTRA_PROXY', 'HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NODE_USE_ENV_PROXY')) {
+        $savedProxyVars[$pn] = [Environment]::GetEnvironmentVariable($pn)
+    }
+    $agyProxyRun = $null
+    try {
+        foreach ($pn in $savedProxyVars.Keys) {
+            [Environment]::SetEnvironmentVariable($pn, $null)
+        }
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_AGY_WRAPPER', $agyProxyWrapper)
+        [Environment]::SetEnvironmentVariable('HTTP_PROXY', 'http://127.0.0.1:17801')
+        [Environment]::SetEnvironmentVariable('HTTPS_PROXY', 'http://127.0.0.1:17802')
+        $agyProxyRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+            '-RegistryPath', $fixtureRegistry, '-StateDir', $agyProxyEnvState,
+            '-WorkDir', $sandbox, '-Model', 'gemini-4-carbon',
+            '-Prompt', 'TEST_PROXY_PRESERVE'
+        )
+    }
+    finally {
+        foreach ($pn in $savedProxyVars.Keys) {
+            [Environment]::SetEnvironmentVariable($pn, $savedProxyVars[$pn])
+        }
+    }
+    Assert-Test 'Agy preserves pre-set per-scheme HTTP_PROXY/HTTPS_PROXY and sets NODE_USE_ENV_PROXY=1' (
+        $agyProxyRun.code -eq 0 -and
+        $agyProxyRun.json.response -eq 'HTTP=http://127.0.0.1:17801|HTTPS=http://127.0.0.1:17802|NODE=1'
+    )
+
+    # (q) Rev 12 fix: Explicit -Ephemeral rejects non-codex channels (exit 2) while -AutoRecordOk stays valid on agy
+    $agyEphReject = Invoke-TestScript -Script $invokeScript -Arguments (
+        $baseArguments + @('-Model', 'gemini-4-carbon', '-Prompt', 'TEST', '-Ephemeral', '-DryRun')
+    )
+    $agyAutoOkState = Join-Path $sandbox 'rev12-agy-autook-state'
+    $prevWrapperAgyOk = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_AGY_WRAPPER')
+    $agyAutoOkRun = $null
+    try {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_AGY_WRAPPER', $wrapperPath)
+        $agyAutoOkRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+            '-RegistryPath', $fixtureRegistry, '-StateDir', $agyAutoOkState,
+            '-WorkDir', $sandbox, '-Model', 'gemini-4-carbon',
+            '-Prompt', 'TEST_SUCCESS', '-AutoRecordOk'
+        )
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_AGY_WRAPPER', $prevWrapperAgyOk)
+    }
+    Assert-Test 'Explicit -Ephemeral fails with ORCHESTRA_ARGS exit 2 on agy while -AutoRecordOk without -Ephemeral succeeds' (
+        $agyEphReject.code -eq 2 -and
+        $agyEphReject.json.error -match 'ORCHESTRA_ARGS' -and
+        $agyAutoOkRun.code -eq 0 -and
+        $agyAutoOkRun.json.outcome_recorded -eq 'ok' -and
+        $agyAutoOkRun.json.codex_ephemeral -eq $false
     )
 }
 catch {

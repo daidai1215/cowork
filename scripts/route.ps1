@@ -380,12 +380,31 @@ function Resolve-REffort {
     $hitsMechanicalTag = (
         @($TagList | Where-Object { $mechanicalTags -contains $_ }).Count -gt 0
     )
+    $ultraFastTags = @(
+        Get-RValue $Policy 'ultra_fast_tags' @() |
+            ForEach-Object { [string]$_ } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    $hitsUltraFastOnly = (
+        $ultraFastTags.Count -gt 0 -and
+        @($TagList).Count -gt 0 -and
+        @($TagList | Where-Object { $ultraFastTags -notcontains $_ }).Count -eq 0
+    )
     $peakTags = @(
         Get-RValue $Policy 'peak_effort_tags' @() | ForEach-Object { [string]$_ }
     )
     $hitsPeakTag = (
         @($TagList | Where-Object { $peakTags -contains $_ }).Count -gt 0
     )
+    if (
+        $isFastWorkhorse -and
+        -not $Escalated -and
+        $hitsUltraFastOnly -and
+        -not $hitsPeakTag -and
+        ($supported -contains 'medium')
+    ) {
+        return 'medium'
+    }
     if (
         $isFastWorkhorse -and
         -not $Escalated -and

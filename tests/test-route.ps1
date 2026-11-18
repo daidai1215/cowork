@@ -742,6 +742,7 @@ try {
             hydrogen = 'hydrogen_max'
         })
         Set-OrchestraProperty $hostPolicy 'mechanical_fast_tags' @('bulk', 'boilerplate', 'scan', 'test_gen')
+        Set-OrchestraProperty $hostPolicy 'ultra_fast_tags' @()
         Set-OrchestraProperty $hostPolicy 'carbon_peak_offload_tags' @('bulk', 'boilerplate', 'scan', 'test_gen')
         Set-OrchestraProperty $hostPolicy 'hydrogen_max_policy' ([pscustomobject]@{
             from_model = 'syn-prose'
@@ -1019,6 +1020,36 @@ try {
             $pNoFastShift.Result.primary -eq 'syn-prose' -and
             $pNoFastShift.Result.reviewer -eq 'syn-aesthetic'
         ) 'PreferIdle in carbon_peak handles missing fast workhorse ($fastToId=$null) without StrictMode crash'
+
+        # 12. Ultra-fast effort tier (policy.ultra_fast_tags -> medium for pure scan, high for mixed bulk,scan, escalated xhigh/Carbon)
+        Set-RTestExhaustion
+        $ultraRegistry = Copy-RTestFixture $hostRegistry
+        $ultraPolicy = Get-OrchestraProperty $ultraRegistry 'policy'
+        Set-OrchestraProperty $ultraPolicy 'ultra_fast_tags' @('scan')
+        Save-RTestFixture $ultraRegistry
+
+        $uScanHyd = Invoke-RTest 'scan' -ModeName 'hydrogen_max'
+        $uScanCarb = Invoke-RTest 'scan' -ModeName 'carbon_peak'
+        $uBulkScan = Invoke-RTest 'bulk,scan' -ModeName 'hydrogen_max'
+        $uScanEsc = Invoke-RTest 'scan' -ModeName 'hydrogen_max' -Escalate
+        Set-RTestExhaustion @('syn-prose')
+        $uScanEscFast = Invoke-RTest 'scan' -ModeName 'hydrogen_max' -Escalate
+        Assert-RTest (
+            $uScanHyd.Exit -eq 0 -and
+            $uScanHyd.Result.primary -eq 'syn-fast' -and
+            $uScanHyd.Result.primary_effort -eq 'medium' -and
+            $uScanCarb.Exit -eq 0 -and
+            $uScanCarb.Result.primary -eq 'syn-fast' -and
+            $uScanCarb.Result.primary_effort -eq 'medium' -and
+            $uBulkScan.Exit -eq 0 -and
+            $uBulkScan.Result.primary -eq 'syn-fast' -and
+            $uBulkScan.Result.primary_effort -eq 'high' -and
+            $uScanEsc.Exit -eq 0 -and
+            $uScanEsc.Result.primary -eq 'syn-prose' -and
+            $uScanEscFast.Exit -eq 0 -and
+            $uScanEscFast.Result.primary -eq 'syn-fast' -and
+            $uScanEscFast.Result.primary_effort -eq 'xhigh'
+        ) 'ultra_fast_tags routes pure scan to medium, mixed bulk,scan to high, and escalated scan to Carbon/xhigh'
     }
     finally {
         Save-RTestFixture $fixture

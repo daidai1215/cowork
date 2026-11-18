@@ -387,6 +387,9 @@
                                                 "scan",
                                                 "test_gen"
                                             ],
+                   "ultra_fast_tags":  [
+                                           "scan"
+                                       ],
                    "carbon_peak_offload_tags":  [
                                                     "bulk",
                                                     "boilerplate",
@@ -1291,6 +1294,6 @@
                     "best-knowledge":  "gemini-4-carbon",
                     "best-aesthetic":  "claude-opus-5-5"
                 },
-    "registry_rev":  11,
-    "updated":  "2026-11-18T13:42:00.0000000Z"
+    "registry_rev":  12,
+    "updated":  "2026-11-18T14:32:00.0000000Z"
 }

@@ -319,10 +319,8 @@ function Build-RoutingBlock {
             '- **' + (U '\u4e3b\u63a7\u611f\u77e5\u4e09\u6863\u81ea\u52a8\u5206\u5c42') +
             ' (`-HostModel orchestrator|carbon|hydrogen`)**: ' +
             (U '\u4f9d\u636e\u4e3b\u63a7\u73af\u5883\u81ea\u52a8\u5207\u6362') +
-            ' `orchestrator_fast` / `carbon_peak` / `hydrogen_max` (' +
-            (U '\u5728') + ' `bulk`/`boilerplate`/`scan`/`test_gen` ' +
-            (U '\u81ea\u52a8\u964d\u4e3a') + ' `high` ' +
-            (U '\u63d0\u901f\uff0c\u5176\u4f59\u4fdd\u6301') + ' `xhigh`):'
+            ' `orchestrator_fast` / `carbon_peak` / `hydrogen_max` (4H: `scan` -> `medium`, `bulk`/`boilerplate`/`test_gen` -> `high`, ' +
+            (U '\u5176\u4f59') + ' -> `xhigh`):'
         ))
         [void]$lines.Add('')
         [void]$lines.Add((

@@ -20,6 +20,10 @@ param(
     [switch]$NoSlotWait,
     [switch]$AllowCodexShell,
     [switch]$AutoRecordOk,
+    [switch]$FullCodexConfig,
+    [switch]$Ephemeral,
+    [switch]$KeepSession,
+    [switch]$EnableAgySlashCommands,
     [string]$StatusFile,
     [switch]$DryRun,
     [string]$RegistryPath,
@@ -50,6 +54,59 @@ function ConvertTo-NullableLong {
     if ($Value -is [string] -and [string]::IsNullOrWhiteSpace($Value)) { return $null }
     try { return [long]$Value }
     catch { return $null }
+}
+
+function Set-ChildProxyEnvironment {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Environment,
+        [switch]$ForAgy
+    )
+    $proxyInfo = Get-OrchestraSystemProxy
+    $rawProxy = [string]$proxyInfo.proxy
+    $redactedProxy = $null
+    if (-not [string]::IsNullOrWhiteSpace($rawProxy)) {
+        $redactedProxy = ConvertTo-RedactedProxyUrl $rawProxy
+        $isOverride = ([string]$proxyInfo.source -eq 'override')
+        foreach ($pair in @(
+            @{ Upper = 'HTTP_PROXY'; Lower = 'http_proxy'; Value = $rawProxy },
+            @{ Upper = 'HTTPS_PROXY'; Lower = 'https_proxy'; Value = $rawProxy },
+            @{ Upper = 'ALL_PROXY'; Lower = 'all_proxy'; Value = $rawProxy },
+            @{ Upper = 'NO_PROXY'; Lower = 'no_proxy'; Value = 'localhost,127.0.0.1,::1' }
+        )) {
+            $shouldSet = ($isOverride -and $pair.Upper -ne 'NO_PROXY')
+            if (-not $shouldSet) {
+                $hasExisting = (
+                    -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($pair.Upper)) -or
+                    -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($pair.Lower))
+                )
+                $shouldSet = -not $hasExisting
+            }
+            if ($shouldSet) {
+                $Environment[$pair.Upper] = $pair.Value
+            }
+        }
+    }
+    else {
+        $rawProxy = $null
+    }
+    if ($ForAgy -and [string]$proxyInfo.source -ne 'disabled') {
+        $hasAnyProxy = (
+            $null -ne $rawProxy -or
+            $Environment.ContainsKey('HTTP_PROXY') -or
+            $Environment.ContainsKey('HTTPS_PROXY') -or
+            $Environment.ContainsKey('ALL_PROXY') -or
+            -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('HTTP_PROXY')) -or
+            -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('http_proxy')) -or
+            -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('HTTPS_PROXY')) -or
+            -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('https_proxy')) -or
+            -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('ALL_PROXY')) -or
+            -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('all_proxy'))
+        )
+        if ($hasAnyProxy -and [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('NODE_USE_ENV_PROXY'))) {
+            $Environment['NODE_USE_ENV_PROXY'] = '1'
+        }
+    }
+    return @{ raw = $rawProxy; redacted = $redactedProxy }
 }
 
 function Get-ReplanCircuitBreaker {
@@ -103,9 +160,14 @@ $resumeInvalidated = $false
 $replanRequired = $false
 $replanDetail = $null
 $codexShellEnabled = $false
+$codexFastConfig = $false
+$codexEphemeral = $false
+$agyDirectExe = $false
+$agySlashCommandsDisabled = $false
 $effectiveConnectTimeout = 0
 $reconnectAbortLimit = 2
 $proxyUrl = $null
+$reportedProxyUrl = $null
 $liveStatusPath = $null
 $latestChannelStatusPath = $null
 $explicitStatusPath = $null
@@ -138,6 +200,12 @@ try {
     $hasPromptFile = $PSBoundParameters.ContainsKey('PromptFile')
     if ($hasPrompt -eq $hasPromptFile) {
         throw 'ORCHESTRA_ARGS: Specify exactly one of -Prompt or -PromptFile.'
+    }
+    if ($Ephemeral -and -not [string]::IsNullOrWhiteSpace($Resume)) {
+        throw 'ORCHESTRA_ARGS: Cannot combine -Ephemeral with -Resume.'
+    }
+    if ($Ephemeral -and $KeepSession) {
+        throw 'ORCHESTRA_ARGS: Cannot combine -Ephemeral with -KeepSession.'
     }
     if ($Access -notin @('read', 'write') -or $TimeoutSec -lt 0 -or $ConnectTimeoutSec -lt 0 -or $SlotWaitSec -lt 0) {
         throw 'ORCHESTRA_ARGS: Invalid access or timeout.'
@@ -254,6 +322,9 @@ try {
             throw "ORCHESTRA_QUOTA: Model $modelId is $availability; no fallback was invoked."
         }
     }
+    if ($Ephemeral -and $channel -ne 'codex') {
+        throw 'ORCHESTRA_ARGS: -Ephemeral is only supported on the codex channel.'
+    }
 
     $Tags = @(
         foreach ($rawTag in @($Tags)) {
@@ -290,20 +361,39 @@ try {
                 }
             }
             $modelTier = [string](Get-OrchestraProperty $modelObject 'tier' '')
-            if ($modelTier -eq 'fast' -and $Effort -eq 'xhigh' -and ($supportedEfforts -contains 'high')) {
-                $rawMech = if ($null -ne $policy) {
-                    Get-OrchestraProperty $policy 'mechanical_fast_tags' $null
+            if ($modelTier -eq 'fast' -and $Effort -eq 'xhigh' -and -not $hitsPeak) {
+                $rawUltra = if ($null -ne $policy) {
+                    Get-OrchestraProperty $policy 'ultra_fast_tags' $null
                 }
                 else { $null }
-                $mechTags = if ($null -eq $rawMech) {
-                    @('bulk', 'boilerplate', 'scan', 'test_gen')
+                $ultraTags = @(
+                    if ($null -ne $rawUltra) {
+                        $rawUltra | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                    }
+                )
+                $hitsUltraOnly = (
+                    $ultraTags.Count -gt 0 -and
+                    $Tags.Count -gt 0 -and
+                    (@($Tags | Where-Object { $ultraTags -notcontains $_ }).Count -eq 0)
+                )
+                if ($hitsUltraOnly -and ($supportedEfforts -contains 'medium')) {
+                    $Effort = 'medium'
                 }
-                else {
-                    @($rawMech | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-                }
-                $hitsMech = (@($Tags | Where-Object { $mechTags -contains $_ }).Count -gt 0)
-                if ($hitsMech -and -not $hitsPeak) {
-                    $Effort = 'high'
+                elseif ($supportedEfforts -contains 'high') {
+                    $rawMech = if ($null -ne $policy) {
+                        Get-OrchestraProperty $policy 'mechanical_fast_tags' $null
+                    }
+                    else { $null }
+                    $mechTags = if ($null -eq $rawMech) {
+                        @('bulk', 'boilerplate', 'scan', 'test_gen')
+                    }
+                    else {
+                        @($rawMech | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                    }
+                    $hitsMech = (@($Tags | Where-Object { $mechTags -contains $_ }).Count -gt 0)
+                    if ($hitsMech) {
+                        $Effort = 'high'
+                    }
                 }
             }
         }
@@ -374,16 +464,9 @@ try {
     $stdinText = $null
     $promptInFile = $false
     if ($channel -eq 'codex') {
-        $proxyInfo = Get-OrchestraSystemProxy
-        if (-not [string]::IsNullOrWhiteSpace([string]$proxyInfo.proxy)) {
-            $proxyUrl = [string]$proxyInfo.proxy
-            $childEnvironment['HTTP_PROXY'] = $proxyUrl
-            $childEnvironment['HTTPS_PROXY'] = $proxyUrl
-            $childEnvironment['ALL_PROXY'] = $proxyUrl
-            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('NO_PROXY'))) {
-                $childEnvironment['NO_PROXY'] = 'localhost,127.0.0.1,::1'
-            }
-        }
+        $proxySet = Set-ChildProxyEnvironment -Environment $childEnvironment
+        $proxyUrl = $proxySet.raw
+        $reportedProxyUrl = $proxySet.redacted
         $needsPluginTools = (
             @($Tags | Where-Object { @('image_gen', 'office', 'ppt') -contains $_ }).Count -gt 0
         )
@@ -415,11 +498,46 @@ try {
                 }
             }
         }
+        $codexFastConfig = $false
+        $codexCfgOverrides = $null
+        if ((-not [bool]$FullCodexConfig) -and (-not $codexShellEnabled)) {
+            $cfgHome = if (-not [string]::IsNullOrWhiteSpace($codexHomePath)) {
+                $codexHomePath
+            }
+            else {
+                Get-OrchestraCodexHome
+            }
+            $codexCfgOverrides = Get-CodexEssentialConfigOverrides -CodexHome $cfgHome
+            if ([bool]$codexCfgOverrides.fast_config_supported) {
+                $codexFastConfig = $true
+            }
+        }
+        $codexEphemeral = (
+            [bool]$Ephemeral -or (
+                [bool]$AutoRecordOk -and
+                [string]::IsNullOrWhiteSpace($Resume) -and
+                -not [bool]$KeepSession
+            )
+        )
+
         foreach ($argument in @(
             'exec', '--json', '-s',
             $(if ($Access -eq 'read') { 'read-only' } else { 'workspace-write' }),
             '--disable', 'unbounded_connection_retries',
-            '--skip-git-repo-check', '-C', $WorkDir,
+            '--skip-git-repo-check'
+        )) { [void]$arguments.Add([string]$argument) }
+        if ($codexFastConfig) {
+            [void]$arguments.Add('--ignore-user-config')
+            [void]$arguments.Add('--ignore-rules')
+            foreach ($cfgArg in @($codexCfgOverrides.config_args)) {
+                [void]$arguments.Add([string]$cfgArg)
+            }
+        }
+        if ($codexEphemeral) {
+            [void]$arguments.Add('--ephemeral')
+        }
+        foreach ($argument in @(
+            '-C', $WorkDir,
             '-m', $flag, '-c', ('model_reasoning_effort="' + $Effort + '"')
         )) { [void]$arguments.Add([string]$argument) }
         if (-not $codexShellEnabled) {
@@ -468,12 +586,29 @@ try {
         $stdinText = $Prompt
     }
     elseif ($channel -eq 'agy') {
-        $executable = 'powershell.exe'
-        $wrapper = Get-AgyWrapperPath
-        if (-not $DryRun) { $wrapper = Resolve-AgyWrapper }
+        $proxySet = Set-ChildProxyEnvironment -Environment $childEnvironment -ForAgy
+        $proxyUrl = $proxySet.raw
+        $reportedProxyUrl = $proxySet.redacted
+        $agyTarget = if ($DryRun) { Get-AgyExecutablePath } else { Resolve-AgyExecutable }
+        if ([IO.Path]::GetExtension($agyTarget) -ieq '.ps1') {
+            $agyDirectExe = $false
+            $executable = 'powershell.exe'
+            foreach ($argument in @(
+                '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $agyTarget
+            )) { [void]$arguments.Add([string]$argument) }
+        }
+        else {
+            $agyDirectExe = $true
+            $executable = $agyTarget
+        }
         foreach ($argument in @(
-            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $wrapper,
-            '--model', $flag, '--output-format', 'stream-json',
+            '--model', $flag, '--output-format', 'stream-json'
+        )) { [void]$arguments.Add([string]$argument) }
+        if (-not $EnableAgySlashCommands) {
+            $agySlashCommandsDisabled = $true
+            [void]$arguments.Add('--disable-slash-commands')
+        }
+        foreach ($argument in @(
             '--print-timeout', (
                 $TimeoutSec.ToString([Globalization.CultureInfo]::InvariantCulture) + 's'
             )
@@ -533,6 +668,10 @@ try {
             access = $Access; work_dir = $WorkDir; effort = $Effort
             connect_timeout_sec = $effectiveConnectTimeout
             codex_shell_enabled = $codexShellEnabled
+            codex_fast_config = $codexFastConfig
+            codex_ephemeral = $codexEphemeral
+            agy_direct_exe = $agyDirectExe
+            agy_slash_commands_disabled = $agySlashCommandsDisabled
             pool = $poolName
             pool_limit = [int]$poolLimits[$poolName]
         }
@@ -614,7 +753,7 @@ try {
                 phase = $Phase
                 slot_wait_sec = [double]$slotWaitedSec
                 session_id = $capture.session_id
-                proxy = $proxyUrl
+                proxy = $reportedProxyUrl
                 codex_shell_enabled = [bool]$codexShellEnabled
                 started_utc = $startedUtc
                 updated_utc = (Get-OrchestraNow).ToString('o')
@@ -1200,8 +1339,7 @@ if (-not $DryRun -and $null -ne $paths -and $null -ne $modelObject) {
 if (
     $AutoRecordOk -and -not $DryRun -and -not $adHoc -and
     $exitCode -eq 0 -and -not $replanRequired -and
-    $null -ne $paths -and
-    -not [string]::IsNullOrWhiteSpace([string]$capture.session_id)
+    $null -ne $paths
 ) {
     $recordScript = Join-Path $PSScriptRoot 'record-outcome.ps1'
     if ([IO.File]::Exists($recordScript)) {
@@ -1212,7 +1350,7 @@ if (
             $recExec = Invoke-OrchestraProcess -FilePath $psHostExe -Arguments @(
                 '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
                 '-File', $recordScript,
-                '-SessionId', [string]$capture.session_id,
+                '-InvocationId', $invocationId,
                 '-Outcome', 'ok',
                 '-RegistryPath', $paths.Registry,
                 '-StateDir', $paths.StateDir
@@ -1242,7 +1380,7 @@ if (-not $DryRun -and @($finalStatusTargets).Count -gt 0) {
         slot_wait_sec = [double]$slotWaitedSec
         exit = [int]$exitCode
         session_id = $capture.session_id
-        proxy = $proxyUrl
+        proxy = $reportedProxyUrl
         codex_shell_enabled = [bool]$codexShellEnabled
         started_utc = $startedUtc
         updated_utc = (Get-OrchestraNow).ToString('o')
@@ -1274,8 +1412,12 @@ $finalResult = @{
     resume_invalidated = [bool]$resumeInvalidated
     replan_required = [bool]$replanRequired
     replan_detail = $replanDetail
-    proxy = $proxyUrl
+    proxy = $reportedProxyUrl
     codex_shell_enabled = [bool]$codexShellEnabled
+    codex_fast_config = [bool]$codexFastConfig
+    codex_ephemeral = [bool]$codexEphemeral
+    agy_direct_exe = [bool]$agyDirectExe
+    agy_slash_commands_disabled = [bool]$agySlashCommandsDisabled
     status_file = $reportedStatusFile
     events_file = $eventsLogPath
     context_files_count = [int]$contextFilesList.Count

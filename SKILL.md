@@ -1,6 +1,6 @@
 ---
 name: cowork
-description: 【多模型协同总调度·极致性能与三档主控感知版】在 GPT-6.2 Astra（high / 攻坚 xhigh，Codex + Cockpit 自动切号）、Gemini 4 Carbon（high，极高上限）、Gemini 4 Hydrogen（4H Extra xhigh / 机械 high 快速主力）与 Claude Opus 5.5（high，严格保护仅做审美把关与精简终裁）之间智能派工；支持 Orchestrator Fast-Plan 免空转门禁（<5 未读文件 0 外调）与执行期默认双开 /swarm + /cowork、三档主控感知路由（-HostModel orchestrator|carbon|hydrogen）、KV 前缀缓存置顶与静默事件流。提及 cowork、多模型配合、多模型协作、派工、gpt-write、gpt-review、4H 快速模式、swarm 调 GPT/Opus 时触发。
+description: 【多模型协同总调度·极致性能与三档主控感知版】在 GPT-6.2 Astra（high / 攻坚 xhigh，Codex + Cockpit 自动切号）、Gemini 4 Carbon（high，极高上限）、Gemini 4 Hydrogen（4H medium/high/xhigh 三档快速主力）与 Claude Opus 5.5（high，严格保护仅做审美把关与精简终裁）之间智能派工；支持 Orchestrator Fast-Plan 免空转门禁（<5 未读文件 0 外调）与执行期默认双开 /swarm + /cowork、三档主控感知路由（-HostModel orchestrator|carbon|hydrogen）、CLI 冷启瘦身与 KV 前缀缓存置顶。提及 cowork、多模型配合、多模型协作、派工、gpt-write、gpt-review、4H 快速模式、swarm 调 GPT/Opus 时触发。
 ---
 
 # cowork：多模型协同总调度
@@ -9,7 +9,7 @@ description: 【多模型协同总调度·极致性能与三档主控感知版�
 **运行时状态**：`$HOME\.cowork\`。其中 `state.json` 记录额度状态、基线与扫描时间，`usage.jsonl` 记录调用账本。
 **当前主力阵容与资源排序（由 `scripts/sync-docs.ps1` 自动同步）**：
 <!-- AUTO:ROSTER:START -->
-> 自动同步自 `registry/models.json` (`registry_rev: 11`, 活跃模型: 4)
+> 自动同步自 `registry/models.json` (`registry_rev: 12`, 活跃模型: 4)
 
 | 模型 | ID / 通道 | 默认档位 | 顶级长板（>=9） | 额度 (`quota_rank`) | 速度 (`speed_rank`) | 运行特性 |
 |---|---|---|---|---|---|---|
@@ -76,10 +76,11 @@ description: 【多模型协同总调度·极致性能与三档主控感知版�
    - **跨账号 `-Resume <sid>` 失效处理（`resume_invalidated=true`）**：
      - 一旦返回 JSON 中 `resume_invalidated=true`，**严禁继续对旧 `<sid>` 重试**！必须立即**去掉 `-Resume` 开启新会话**，将 `<scratch>/plan_contract.md` 等阶段上下文内联续接。
 3. **PATH 上的 `codex.exe` 为 0.145 旧版**：必须使用桌面版自带的新版 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`（`invoke-model.ps1` 自动解析）。
-4. **GPT 默认“纯推理大脑快道”（硬件级禁内部 Shell 防沙箱假死）**：
-   - 本地工具极快的 Gemini 4 Carbon / 4H Extra 负责读文件、将上下文与契约打包进 `<scratch>/plan_contract.md`；
-   - `invoke-model.ps1` 在默认 `-Access read`（含 `-OutFile` 纯文本代码块交付）下自动追加 `--disable shell_tool --disable unified_exec`，并自动通过 `--add-dir` 挂载 `-PromptFile` / `-OutFile` 所在的 `<scratch>` 目录——从命令行层面拔掉易卡死的 Windows 内部沙箱 shell，让 GPT 直奔推理与代码生成（仅 `image_gen` / `office` / `ppt` 标签、直接 `-Access write` 无 `-OutFile`，或显式传 `-AllowCodexShell` 时才启用 Codex 内部工具）。
-   - agy（Gemini 4 Carbon / Gemini 4 Hydrogen / Opus 5.5）的文件与终端工具正常，可直接使用 `-Access write`。
+4. **GPT 纯推理快道 & CLI 冷启动瘦身（默认开启，显著降延迟）**：
+   - 本地工具极快的 Gemini 4 Carbon / 4H 负责读文件并将上下文与契约打包进 `<scratch>/context_pack.md` / `plan_contract.md`；
+   - **Codex 纯推理极速配置（`codex_fast_config`）**：`invoke-model.ps1` 在未启用内部 shell（默认 `-Access read` 或 `-OutFile` 纯文本交付，非 `-AllowCodexShell` / `image_gen`）时，默认传 `--ignore-user-config --ignore-rules --disable shell_tool --disable unified_exec` 跳过重型 MCP/插件/规则加载，同时从 `config.toml` 提取关键标量（`model_provider`、`forced_login_method`、`service_tier`、`windows.sandbox`）以 `-c` 精确透传，完整保留官方 ChatGPT OAuth `auth.json` 与优先级通道；若确需全量 Codex 插件/规则，传 `-FullCodexConfig`。
+   - **无状态极速执行（`codex_ephemeral`）**：传 `-Ephemeral` 或无 `-Resume` 搭配 `-AutoRecordOk`（且未传 `-KeepSession`）时自动加 `--ephemeral`，跳过落盘会话/SQLite 膨胀，且 `-AutoRecordOk` 改按 `-InvocationId` 记账，确保无会话 ID 也能稳录 `ok`；需保留会话断点时传 `-KeepSession`（禁与 `-Ephemeral` 或 `-Resume` 合用）。
+   - **agy 直连与零斜杠开销（`agy_direct_exe`、`agy_slash_commands_disabled`）**：优先直连本机 `agy.exe`（跳过 `powershell.exe agy-exec.ps1` 包装冷启，自动继承 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` + `NODE_USE_ENV_PROXY=1` + `NO_PROXY`），并默认传 `--disable-slash-commands` 跳过全量斜杠指令解析；需恢复斜杠指令时传 `-EnableAgySlashCommands`。agy 的文件与终端工具正常，可直接使用 `-Access write`。
 5. **PowerShell 5.1 编码陷阱**：含中文的 `.ps1` 必须保存为 UTF-8 with BOM（`extract-files.ps1` 已自动处理），命令行不要直接传中文字面量，统一走 `-PromptFile`。
 
 所有脚本统一按以下方式调用：
@@ -108,10 +109,10 @@ detect-models.ps1          # 24 小时内已扫描过会直接返回 {"skipped":
 2. 执行 `route.ps1 -Tags <标签…> [-HostModel orchestrator|carbon|hydrogen] [-Mode peak|orchestrator_fast|carbon_peak|hydrogen_max|fast_4h|balanced|quality|economy|fast] [-Fast4H] [-BusyAgents <id|pool,...>] [-PreferIdle] [-AllowEscalation]`，获取 `primary / primary_effort / reviewer / polisher / fallback / pattern / orchestration`（含 `orchestration.host_mode`、`orchestration.final_reviewer`、`orchestration.final_review_triggers`、`orchestration.pool_load`、`orchestration.scale_out_hint`、`orchestration.parallel_lanes`）。
    - **三档主控感知路由（未显式指定 `-Mode` / `-Fast4H` 时由 `-HostModel` 自动映射）**：
      - `-HostModel orchestrator` → `orchestrator_fast`：按 `fast_workhorse_map` 将约 80%+ Carbon 常规负载下放 `gemini-4-hydrogen`，保留 Carbon 于 `paper/essay/copywriting`、`math/algorithm` 复核及 `-AllowEscalation`；
-     - `-HostModel carbon` → `carbon_peak`：Carbon 维持主力，仅命中 `bulk/boilerplate/scan/test_gen`（且无 `-AllowEscalation`）时将 Gemini 分流给 `4H` **`high`** 档提速；
-     - `-HostModel hydrogen` → `hydrogen_max`：Gemini 侧 100% 由 `4H` 执行，仅命中 `paper/essay/copywriting/architecture` 或 `-AllowEscalation` 时将 `orchestration.final_reviewer` 设为 `gemini-4-carbon` 终审。
+     - `-HostModel carbon` → `carbon_peak`：Carbon 维持主力，仅命中 `bulk/boilerplate/scan/test_gen`（且无 `-AllowEscalation`）时将 Gemini 分流给 `4H` **`medium`**（纯 `scan`）/ **`high`**（`bulk/boilerplate/test_gen`）档提速；
+     - `-HostModel hydrogen` → `hydrogen_max`：Gemini 侧 100% 由 `4H` 执行（纯 `scan` `medium`、机械 `high`、推理/编码 `xhigh`），仅命中 `paper/essay/copywriting/architecture` 或 `-AllowEscalation` 时将 `orchestration.final_reviewer` 设为 `gemini-4-carbon` 终审。
    - **多池负载均衡与 LPT 并行编排（`-BusyAgents` / `-PreferIdle`）**：自动读取 `$HOME\.cowork\slots` 并叠加 `-BusyAgents`（模型 ID 或池名 `codex_openai`/`agy_anthropic`/`agy_google`）；当 `-PreferIdle` 开启且首选池满槽（`available <= 0`）时，在**严守 `min_cap` 与 `hard_rules`**前提下切至空闲池候选模型；同时通过 `parallel_lanes` 给出 LPT `T=0` 跨池并发建议（详见 `collaboration-patterns.md` 第 10 节）。
-   - **4H 机械 `high` vs 推理 `xhigh`**：`4H` 在推理/开发/审查场景跑 `xhigh`（4H Extra），命中 `mechanical_fast_tags`（`bulk/boilerplate/scan/test_gen`）且未升级时自动降为极速 **`high`** 档。
+   - **4H 三档算力阶梯（`medium` / `high` / `xhigh`）**：`4H` 在纯 `scan`（`policy.ultra_fast_tags`）自动降为极速 **`medium`** 档（`gemini-4-hydrogen-medium`）；命中 `bulk/boilerplate/test_gen`（`mechanical_fast_tags`，或 `scan,bulk` 混标）跑 **`high`** 档；常规研发/推理/Bug 审查保持 **`xhigh`**（4H Extra）。
 3. 主控可否决 route 的建议，但必须在最终汇报中说明理由。
 
 **硬规则**（`route.ps1` 与 `models.json` 已双锁死，主控必须遵守）：
@@ -147,7 +148,7 @@ detect-models.ps1          # 24 小时内已扫描过会直接返回 {"skipped":
 | 常规后端 / Bugfix | `bugfix` | `gpt-6.2-astra` (`high`) | `gemini-4-hydrogen` (`xhigh`) | - |
 | 数学 / 算法验算 | `math,algorithm` | `gpt-6.2-astra` (`xhigh`) | `gemini-4-carbon` (`high`) | - |
 
-- **主控感知三档自动分层 (`-HostModel orchestrator|carbon|hydrogen`)**: 依据主控环境自动切换 `orchestrator_fast` / `carbon_peak` / `hydrogen_max` (在 `bulk`/`boilerplate`/`scan`/`test_gen` 自动降为 `high` 提速，其余保持 `xhigh`):
+- **主控感知三档自动分层 (`-HostModel orchestrator|carbon|hydrogen`)**: 依据主控环境自动切换 `orchestrator_fast` / `carbon_peak` / `hydrogen_max` (4H: `scan` -> `medium`, `bulk`/`boilerplate`/`test_gen` -> `high`, 其余 -> `xhigh`):
 
 | 主控模式 (`-HostModel`) | 典型场景 | `-Tags` | 主执行 (`primary`) | 审查 (`reviewer`) | 终审 (`final_reviewer`) |
 |---|---|---|---|---|---|
@@ -190,7 +191,7 @@ detect-models.ps1          # 24 小时内已扫描过会直接返回 {"skipped":
 ### Context & KV Prefix Cache Protocol + 多池 LPT 与空分/时分切片（详见 `collaboration-patterns.md` 第 9–10 节）
 
 1. **静态打包 + 增量 Diff（`scripts/pack-context.ps1`）**：
-   - 跨多文件先用 `pack-context.ps1 -WorkDir <d> -Files <f1,f2> -OutFile <scratch>/context_pack.md`（或派 `4H High -Tags scan`）生成静态包（去 BOM、统一 `\n`、单文件默认截断 400 行）；
+   - 跨多文件先用 `pack-context.ps1 -WorkDir <d> -Files <f1,f2> -OutFile <scratch>/context_pack.md`（或派 `4H Medium -Tags scan`）生成静态包（去 BOM、统一 `\n`、单文件默认截断 400 行）；
    - 返修二审先跑本地语法/单测快筛（日志写 `<scratch>/test.log`），再用 `pack-context.ps1 -WorkDir <d> -GitDiff [-BaseRef <ref>] [-AllowedPrefixes <p>] -TestLogFile <scratch>/test.log -OutFile <scratch>/delta_review.md` 仅喂增量 Diff 与末尾 `<= 20` 行测试摘要送 Astra/Opus。
 2. **`-ContextFiles` 静态前缀置顶**：调用 `invoke-model.ps1` 时传 `-ContextFiles "<scratch>/context_pack.md,..."`，脚本将其去 BOM、统一 `\n` 后固定拼接在提示词**最顶部**（`=====CONTEXT_PACK: ...=====`），其后接 `=====TASK_INSTRUCTIONS=====` 与动态 `$Prompt`（Codex 自动加 `--add-dir`），吃满模型 KV 前缀缓存。
 3. **默认静默 stdout 与 `.events.jsonl` 持久化**：`invoke-model.ps1` 默认不向 `stdout` 输出中间流事件（仅末行输出 1 行 `orchestra_result` JSON），完整事件流实时写入 `$HOME\.cowork\live\<invocation_id>.events.jsonl`（返回 `events_file`，超 7 天自动清理）；仅排障时传 `-StreamStdout`。
@@ -205,14 +206,15 @@ detect-models.ps1          # 24 小时内已扫描过会直接返回 {"skipped":
 ```powershell
 # 若当前 run_command 声明含 BypassSandbox 参数则传 true；无该参数的新版环境直接调用
 pack-context.ps1 -WorkDir <d> [-Files <f1,f2> | -GitDiff [-BaseRef <ref>] [-AllowedPrefixes <p>] [-TestLogFile <log>]] -OutFile <out.md>
-invoke-model.ps1 -Model <id|别名> -Access read|write -PromptFile <f> -WorkDir <d> [-ContextFiles <f1,f2>] [-Tags <tags>] [-Effort <e>] [-SlotWaitSec <n>] [-NoSlotWait] [-AutoRecordOk] [-StreamStdout] [-ConnectTimeoutSec <n>] [-AllowCodexShell] [-StatusFile <f>] [-Resume <sid>] [-OutFile <f>] [-JsonSchema <f>] [-DryRun]
+invoke-model.ps1 -Model <id|别名> -Access read|write -PromptFile <f> -WorkDir <d> [-ContextFiles <f1,f2>] [-Tags <tags>] [-Effort <e>] [-SlotWaitSec <n>] [-NoSlotWait] [-AutoRecordOk] [-FullCodexConfig] [-Ephemeral] [-KeepSession] [-EnableAgySlashCommands] [-StreamStdout] [-ConnectTimeoutSec <n>] [-AllowCodexShell] [-StatusFile <f>] [-Resume <sid>] [-OutFile <f>] [-JsonSchema <f>] [-DryRun]
 extract-files.ps1 -InputFile <f> -Root <d> -AllowedPrefixes <p1,p2> [-ForbiddenPrefixes <f1,f2>] [-DryRun]
 ```
 
-- 别名与自动升/降档：支持全部模型 ID 与 `best-*` 能力别名；未显式传 `-Effort` 时，`-Tags` 命中 `peak_effort_tags`（`math`）自动升至 `xhigh`，而 `4H`（`tier=fast`）命中 `mechanical_fast_tags`（`bulk/boilerplate/scan/test_gen`）自动降至极速 `high`。
+- 别名与自动升/降档（`4H` 三档阶梯）：支持全部模型 ID 与 `best-*` 能力别名；未显式传 `-Effort` 时，`-Tags` 命中 `peak_effort_tags`（`math`）自动升至 `xhigh`；而 `4H`（`tier=fast`）在纯 `scan`（`ultra_fast_tags`）自动降至超快 `medium` 档，在 `bulk/boilerplate/test_gen`（`mechanical_fast_tags`）降至极速 `high` 档，常规研发保持 `xhigh`。
+- **CLI 冷启瘦身默认开启**：Codex 纯推理快道默认开启 `codex_fast_config`（`--ignore-user-config --ignore-rules` + 标量 `-c` 透传，可用 `-FullCodexConfig` 关闭）；`-Ephemeral` 或无 `-Resume` 配 `-AutoRecordOk` 自动开启 `--ephemeral`（可用 `-KeepSession` 保留会话，且 `-AutoRecordOk` 按 `-InvocationId` 稳妥记账）；agy 优先直连 `agy.exe --disable-slash-commands`（可用 `-EnableAgySlashCommands` 恢复斜杠指令）。
 - **无 `-OutFile` 内联响应与 `-AutoRecordOk` 一步记账**：省略 `-OutFile` 时，输出 JSON 直接内联返回 `response` 与 `response_truncated`（`<= 64000` 字符直接内联；超长自动溢写至 `$HOME\.cowork\live\<invocation_id>.response.md` 并填充 `out_file`）；传入 `-OutFile` 时保持 `response = null` 不撑爆 `stdout`。传 `-AutoRecordOk` 可在调用成功且未触发 `replan_required` 时自动一步写入 `ok` 记账并返回 `outcome_recorded="ok"`，彻底消除 Plan Mode 额外的 `record-outcome.ps1` 轮次。
 - **三池并发槽位保护、AIMD 切号门控与 200ms 错峰（`-SlotWaitSec` / `-NoSlotWait`）**：默认 `-SlotWaitSec 300`，启动前自动在 `$HOME\.cowork\slots` 申请池槽位（`agy_google <=7` / `codex_openai <=4` / `agy_anthropic <=3`），池内已有活跃进程时在锁外错峰 `~200ms`（`policy.launch_stagger_ms`）启动，防 TLS 握手尖峰与 `.codex/*.sqlite` WAL 争抢；遇 `429`/Cockpit 切号自动启用 `15s` AIMD 冷却（`codex_rotation_cooldown_sec`）收口 `codex_openai` 至 `1` 槽、`thread.started` 接通即弹回 `4` 槽；满槽进入 `queued_slot` 等待，且 **Codex 首包握手计时器（`-ConnectTimeoutSec`）在获槽之后才开始计时**；传 `-NoSlotWait` 或超时立刻以退出码 `5`（`ORCHESTRA_LOCK_TIMEOUT`）快速失败。
-- 输出末行为汇总 JSON（默认仅此 1 行到 `stdout`），包含 `effort`、`session_id`、`response`、`response_truncated`、`outcome_recorded`、`pool`、`slot_wait_sec`、`stagger_ms`、`events_file`、`context_files_count`、`usage`（含 `cached_tokens`、`cache_hit_rate`）、`proxy`、`codex_shell_enabled`、`startup_timeout`、`reconnect_aborted`、`status_file`、`attempts`、`account_switched`、`resume_invalidated`、`quota_error`、`replan_required`、`replan_detail`。
+- 输出末行为汇总 JSON（默认仅此 1 行到 `stdout`），包含 `effort`、`session_id`、`response`、`response_truncated`、`outcome_recorded`、`codex_fast_config`、`codex_ephemeral`、`agy_direct_exe`、`agy_slash_commands_disabled`、`pool`、`slot_wait_sec`、`stagger_ms`、`events_file`、`context_files_count`、`usage`（含 `cached_tokens`、`cache_hit_rate`）、`proxy`、`codex_shell_enabled`、`startup_timeout`、`reconnect_aborted`、`status_file`、`attempts`、`account_switched`、`resume_invalidated`、`quota_error`、`replan_required`、`replan_detail`。
 - **熔断拦截**：若 `replan_required=true`（或 `extract-files.ps1` 返回退出码 `3`），严禁强行落盘，主控必须回到只读勘察更新 `plan_contract.md` 后重派。
 - **验收后必做**：单轮外调若已传 `-AutoRecordOk` 则自动完成记账（`outcome_recorded="ok"`）；其余多轮或需要细粒度评级的调用在验收后执行 `record-outcome.ps1 -SessionId <sid> -Outcome ok|redo|fail`。
 

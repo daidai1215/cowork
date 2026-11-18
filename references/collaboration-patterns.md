@@ -19,15 +19,15 @@
        - **未知大仓/硬核证明例外（`>= 5` 未读文件）**：最多仅允许 **1 轮**同步聚合外调——省略 `-OutFile` 直接读取返回 JSON 的 `.response`（`>64KB` 自动溢写 `.response.md` 并设 `response_truncated=true`），必加 `-AutoRecordOk` 一步完成 `outcome_recorded="ok"` 记账；**规划期严禁挂 `schedule 35s` 看门狗、严禁读取 `.events.jsonl`、严禁单独再跑一轮 `record-outcome.ps1`**。
    - **三档主控感知自动分层（`route.ps1 -HostModel orchestrator|carbon|hydrogen`）**：
      - `orchestrator_fast`（`-HostModel orchestrator`）：约 80%+ 原 Carbon 负载下放 `4H Extra`（`gemini-4-hydrogen`），Carbon 仅留守 `architecture`、`paper`/`essay`/`copywriting`、`math`/`algorithm` 复核与 `-AllowEscalation` 升级。
-     - `carbon_peak`（`-HostModel carbon`）：Carbon 保留主力权限，仅将大量简单/机械任务（`bulk` / `boilerplate` / `scan` / `test_gen`，未传 `-AllowEscalation`）分流给 `4H` **`high`** 档提速，其余全归 Carbon。
-     - `hydrogen_max`（`-HostModel hydrogen`）：Gemini 侧 100% 由 `4H` 执行（日常 `xhigh`、机械 `high`），仅当 `-AllowEscalation` 或命中 `paper`/`essay`/`copywriting`/`architecture` 时才设置 `orchestration.final_reviewer = "gemini-4-carbon"` 终审。
-     - **4H 机械降档**：`4H` 在普通/推理任务运行 `xhigh`（4H Extra），命中 `mechanical_fast_tags`（`bulk` / `boilerplate` / `scan` / `test_gen`）且未升级时自动降为极速 **`high`** 档。
+     - `carbon_peak`（`-HostModel carbon`）：Carbon 保留主力权限，仅纯 `scan` 分流给 `4H` **`medium`**、大量机械/样板任务（`bulk` / `boilerplate` / `test_gen`，未传 `-AllowEscalation`）分流给 `4H` **`high`** 档提速，其余全归 Carbon。
+     - `hydrogen_max`（`-HostModel hydrogen`）：Gemini 侧 100% 由 `4H` 执行（纯 `scan` `medium`、机械 `high`、日常 `xhigh`），仅当 `-AllowEscalation` 或命中 `paper`/`essay`/`copywriting`/`architecture` 时才设置 `orchestration.final_reviewer = "gemini-4-carbon"` 终审。
+     - **4H 三档算力阶梯（`medium` / `high` / `xhigh`）**：`4H` 在纯 `scan`（`policy.ultra_fast_tags`）自动降为超快 **`medium`** 档（`gemini-4-hydrogen-medium`）；命中 `mechanical_fast_tags`（`bulk` / `boilerplate` / `test_gen`）且未升级时跑 **`high`** 档；普通/推理/前端/Bug 审查保持 **`xhigh`**（4H Extra）。
    - **平时默认 `peak` 与 Antigravity 共享池认知（Shared-Pool Insight）**：
-     - **Gemini 共享池**：在 Antigravity 内 `Gemini 4 Carbon` 与 `Gemini 4 Hydrogen (4H/4H Extra)` **共享 Gemini 配额池**，但 `4H` 响应快约 2.5 倍且机械 `high` 档更省延迟，因此分流 `4H` 的核心收益在于**并发吞吐提速与避免长等待阻塞**，同时把 Carbon 精准留给高文笔/强世界知识/架构把关。
+     - **Gemini 共享池**：在 Antigravity 内 `Gemini 4 Carbon` 与 `Gemini 4 Hydrogen (4H/4H Extra)` **共享 Gemini 配额池**，但 `4H` 响应快约 2.5 倍且 `medium`/`high` 档更省延迟，因此分流 `4H` 的核心收益在于**并发吞吐提速与避免长等待阻塞**，同时把 Carbon 精准留给高文笔/强世界知识/架构把关。
      - **Claude 独立稀缺池（`claude-opus-5-5` 锁定 `primary_disabled=true`）**：Opus 独占稀缺 Claude 池，严禁主写或开整池 Opus Worker；始终保持 `high` 档，专职前端/视觉 Aesthetic Gate、文案质感把关，以及双旗舰竞标难分高下时的精简方案终裁（输入 ≤ 800 字或截图 + tokens）。
-     - **Codex 外部池（`gpt-6.2-astra`）**：完全不消耗 Antigravity 额度，由本机 Codex + **Cockpit 自动轮换 `auth.json`** 驱动，全部主控模式下均经 `cowork` 直通承担后端/并发/数学/疑难 Bug/生图/Office；官方直连平时可并发 **`<= 4` 路**（配合 `200ms` 错峰发车与 **AIMD 切号门控**：遇 `429`/Cockpit 切号锁瞬时 `15s` 收口至 `1` 槽保护切号，`thread.started` 接通即恢复 `4` 槽；并发子会话严禁共享同一 `-Resume`）。
+     - **Codex 外部池（`gpt-6.2-astra`）**：完全不消耗 Antigravity 额度，由本机 Codex + **Cockpit 自动轮换 `auth.json`** 驱动，全部主控模式下均经 `cowork` 直通承担后端/并发/数学/疑难 Bug/生图/Office；官方直连平时可并发 **`<= 4` 路**（配合 `200ms` 错峰发车与 **AIMD 切号门控**：遇 `429`/Cockpit 切号锁瞬时 `15s` 收口至 `1` 槽保护切号，`thread.started` 接通即恢复 `4` 槽；并发子会话严禁共享同一 `-Resume`；纯推理快道默认开启 `--ignore-user-config --ignore-rules` 瘦身冷启）。
 2. **先只读勘察立项，后分片动笔（Read-Only Recon Gate）**
-   - 复杂任务严禁边看边改。动笔前先用 `4H High`（`-Tags scan`）或只读通道（`-Access read`）汇总仓库骨架至 `<scratch>/context_pack.md`，必要时叠加 Carbon / Astra 复核，签发自包含 `<scratch>/plan_contract.md`：
+   - 复杂任务严禁边看边改。动笔前先用 `4H Medium`（`-Tags scan`）或只读通道（`-Access read`）汇总仓库骨架至 `<scratch>/context_pack.md`，必要时叠加 Carbon / Astra 复核，签发自包含 `<scratch>/plan_contract.md`：
      - **目标与非目标**；
      - **文件所有权边界**：`AllowedPrefixes`（允许写入）与 `ForbiddenPrefixes`（禁止触碰）；
      - **不变量、接口签名与已知陷阱（Invariants & Pitfalls）**；
@@ -182,18 +182,22 @@
 
 ## 9. Context & KV Prefix Cache Protocol（上下文与 KV 前缀缓存协议）
 
-1. **多文件先做静态压缩包（`<scratch>/context_pack.md`）**：跨多文件工作先派 `4H High`（`-Tags scan`）只读提取目录骨架、关键符号签名、契约与不变量写入 `<scratch>/context_pack.md`，禁止反复把完整长文件原文硬塞进每轮 prompt。
-2. **`-ContextFiles` 静态前缀置顶锁缓存**：调用 `invoke-model.ps1` 时将静态参考文件传给 `-ContextFiles "<scratch>/context_pack.md,..."`（支持数组或逗号分隔相对路径）。脚本会自动剥离 BOM、统一 `\n` 换行并按确定顺序固定拼接在提示词**最顶部**（`=====CONTEXT_PACK: <filename>===== ... =====END_CONTEXT_PACK=====`），其后才接 `=====TASK_INSTRUCTIONS=====` 与动态 `$Prompt`（Codex 通道自动通过 `--add-dir` 挂载父目录）。保证静态包只增不改即可持续命中底层 KV 前缀缓存（Astra `$0.40/M` 缓存定价 / agy 前缀复用）。
-3. **默认静默 stdout 与 `.events.jsonl` 持久化**：`invoke-model.ps1` 默认静默吞掉中间流式 JSON 行（`stdout` 仅输出末行 1 条 `orchestra_result` 汇总 JSON），彻底杜绝海量流事件撑爆主控上下文；完整原始事件统一落盘至 `$HOME\.cowork\live\<invocation_id>.events.jsonl`（返回 `events_file`，超 7 天自动清理）。仅在现场排障时显式加 `-StreamStdout`。
-4. **`cached_tokens` 缓存命中遥测**：`invoke-model.ps1` 在 `$finalResult.usage` 与 `usage.jsonl` 中统一回填 `input_tokens`、`output_tokens`、`thinking_tokens`、`cached_tokens`（映射 `agy` `cache_read_tokens` 与 `codex` `cached_input_tokens`）、`total_tokens` 与 `cache_hit_rate`。若连续调用 `cache_hit_rate` 异常偏低，优先核查 `-ContextFiles` 文件列表顺序或顶部是否混入动态时间戳。
-5. **`-Resume` 与 `-ContextFiles` 选型边界（并发严禁共享 `-Resume`）**：
+1. **多文件先做静态压缩包（`<scratch>/context_pack.md`）**：跨多文件工作先派 `4H Medium`（`-Tags scan`）只读提取目录骨架、关键符号签名、契约与不变量写入 `<scratch>/context_pack.md`，禁止反复把完整长文件原文硬塞进每轮 prompt。
+2. **CLI 冷启动瘦身与无状态执行（默认开启，降延迟提吞吐）**：
+   - **Codex 纯推理极速配置（`codex_fast_config`）**：未启用内部 shell 时自动追加 `--ignore-user-config --ignore-rules` 跳过用户级插件/MCP/规则冷加载，仅从 `config.toml` 提取关键标量（`model_provider`、`forced_login_method`、`service_tier`、`windows.sandbox`）以 `-c` 精确透传，保留官方 ChatGPT OAuth `auth.json` 与优先级通道（需全量配置时传 `-FullCodexConfig`）。
+   - **Ephemeral 无状态执行（`codex_ephemeral`）**：传 `-Ephemeral` 或无 `-Resume` 搭配 `-AutoRecordOk`（且未传 `-KeepSession`）时自动加 `--ephemeral`，跳过会话落盘，并通过 `-InvocationId` 完成 `ok` 记账（需保留会话断点时传 `-KeepSession`）。
+   - **agy 直连与零斜杠开销（`agy_direct_exe`、`agy_slash_commands_disabled`）**：优先直连 `agy.exe` 跳过 `powershell.exe agy-exec.ps1` 包装冷启并继承代理 + `NODE_USE_ENV_PROXY=1`，默认传 `--disable-slash-commands`（需保留斜杠指令时传 `-EnableAgySlashCommands`）。
+3. **`-ContextFiles` 静态前缀置顶锁缓存**：调用 `invoke-model.ps1` 时将静态参考文件传给 `-ContextFiles "<scratch>/context_pack.md,..."`（支持数组或逗号分隔相对路径）。脚本会自动剥离 BOM、统一 `\n` 换行并按确定顺序固定拼接在提示词**最顶部**（`=====CONTEXT_PACK: <filename>===== ... =====END_CONTEXT_PACK=====`），其后才接 `=====TASK_INSTRUCTIONS=====` 与动态 `$Prompt`（Codex 通道自动通过 `--add-dir` 挂载父目录）。保证静态包只增不改即可持续命中底层 KV 前缀缓存（Astra `$0.40/M` 缓存定价 / agy 前缀复用）。
+4. **默认静默 stdout 与 `.events.jsonl` 持久化**：`invoke-model.ps1` 默认静默吞掉中间流式 JSON 行（`stdout` 仅输出末行 1 条 `orchestra_result` 汇总 JSON），彻底杜绝海量流事件撑爆主控上下文；完整原始事件统一落盘至 `$HOME\.cowork\live\<invocation_id>.events.jsonl`（返回 `events_file`，超 7 天自动清理）。仅在现场排障时显式加 `-StreamStdout`。
+5. **`cached_tokens` 缓存命中遥测**：`invoke-model.ps1` 在 `$finalResult.usage` 与 `usage.jsonl` 中统一回填 `input_tokens`、`output_tokens`、`thinking_tokens`、`cached_tokens`（映射 `agy` `cache_read_tokens` 与 `codex` `cached_input_tokens`）、`total_tokens` 与 `cache_hit_rate`。若连续调用 `cache_hit_rate` 异常偏低，优先核查 `-ContextFiles` 文件列表顺序或顶部是否混入动态时间戳。
+6. **`-Resume` 与 `-ContextFiles` 选型边界（并发严禁共享 `-Resume`）**：
    - **用 `-Resume <sid>`**：仅限单路串行、同一模型/账号内的轻量连续追问（上下文增量极小，且未触发 Cockpit 切号 `resume_invalidated=true`）。
    - **用新会话 + `-ContextFiles`（不传 `-Resume`）**：**任何并行 Worker/子会话严禁共享同一 `-Resume <sid>`**！独立 Active Verifier 严审、多路分片并行、发生 Cockpit 切号失效（`resume_invalidated=true`）或阶段变更之后，一律开独立新会话并共享同一 `-ContextFiles <scratch>/context_pack.md`——确定性静态前缀同样能吃满 KV 缓存，且彻底隔离旧会话推理锁与历史试错噪声。
-6. **Swarm `fork` 热缓存、`waiting` 复用与 `#channel` 隔离**：
+7. **Swarm `fork` 热缓存、`waiting` 复用与 `#channel` 隔离**：
    - **`fork` 热缓存**：仅当新 Worker 需复用现有成员（或 `coordinator`）已读完的同一大型探索前缀以直吃 KV 热缓存时使用 `fork: "<member>"`；常规互斥分片优先冷启动配合 `<scratch>/context_pack.md`，避免把无关闲聊带入子上下文。
    - **`waiting` 保活复用**：可复用的作者/审查 Worker 任务告一段落后保持 `waiting`（等待状态 0 token 消耗并保留热上下文），待验收返修再 `@` 唤醒；仅在分片彻底合并收尾后才 `kill`（`kill` 会永久销毁其工作区）。
    - **`#channel` / 看板隔离**：看板正文保持极简，用 `#seq` 引用历史消息、仅 `@` 下一步负责的 peer；长分析报告与日志写入 `<scratch>/` 或各自文件，不刷屏共享看板。
-7. **长测试与命令输出节流（Output Log Throttling）**：运行大批量单测、构建或扫描时，将完整日志重定向到 `<scratch>/*.log`（外部调用依赖 `.events.jsonl`），**仅摘取 `<= 20` 行**核心结论（退出码、通过/失败计数、首个错误断言）进入主对话或看板。
+8. **长测试与命令输出节流（Output Log Throttling）**：运行大批量单测、构建或扫描时，将完整日志重定向到 `<scratch>/*.log`（外部调用依赖 `.events.jsonl`），**仅摘取 `<= 20` 行**核心结论（退出码、通过/失败计数、首个错误断言）进入主对话或看板。
 
 ---
 

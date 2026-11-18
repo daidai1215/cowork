@@ -646,13 +646,14 @@ function Test-OrchestraLocalProxy {
     if ([string]::IsNullOrWhiteSpace($ProxyUrl)) {
         return @{ checked = $false; reachable = $true; detail = 'No proxy configured.' }
     }
+    $safeDetailUrl = ConvertTo-RedactedProxyUrl -Url $ProxyUrl
     $uri = $null
     if (-not [Uri]::TryCreate($ProxyUrl, [UriKind]::Absolute, [ref]$uri) -or $uri.Port -le 0) {
-        return @{ checked = $false; reachable = $true; detail = $ProxyUrl }
+        return @{ checked = $false; reachable = $true; detail = $safeDetailUrl }
     }
     $hostLower = ([string]$uri.Host).Trim('[', ']').ToLowerInvariant()
     if ($hostLower -notin @('127.0.0.1', 'localhost', '::1')) {
-        return @{ checked = $false; reachable = $true; detail = $ProxyUrl }
+        return @{ checked = $false; reachable = $true; detail = $safeDetailUrl }
     }
     $connectHost = if ($hostLower -eq 'localhost') { '127.0.0.1' } else { $hostLower }
     $tcp = New-Object System.Net.Sockets.TcpClient
@@ -666,19 +667,19 @@ function Test-OrchestraLocalProxy {
             $completed = $false
         }
         if ($completed -and $tcp.Connected -and -not $connectTask.IsFaulted) {
-            return @{ checked = $true; reachable = $true; detail = $ProxyUrl }
+            return @{ checked = $true; reachable = $true; detail = $safeDetailUrl }
         }
         return @{
             checked = $true
             reachable = $false
-            detail = ('Local proxy ' + $ProxyUrl + ' is unreachable (TCP connect failed within ' + $TimeoutMs + 'ms).')
+            detail = ('Local proxy ' + $safeDetailUrl + ' is unreachable (TCP connect failed within ' + $TimeoutMs + 'ms).')
         }
     }
     catch {
         return @{
             checked = $true
             reachable = $false
-            detail = ('Local proxy ' + $ProxyUrl + ' check failed: ' + $_.Exception.Message)
+            detail = ('Local proxy ' + $safeDetailUrl + ' check failed: ' + $_.Exception.Message)
         }
     }
     finally {
@@ -1227,6 +1228,246 @@ function Resolve-AgyWrapper {
         throw "ORCHESTRA_EXTERNAL: Agy wrapper not found: $path"
     }
     return $path
+}
+
+function Get-AgyExecutablePath {
+    $wrapperOverride = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_AGY_WRAPPER')
+    if (-not [string]::IsNullOrWhiteSpace($wrapperOverride)) {
+        return [IO.Path]::GetFullPath($wrapperOverride)
+    }
+
+    foreach ($envName in @('MODEL_ORCHESTRA_AGY_EXE', 'AGY_EXEC_BIN')) {
+        $exeOverride = [Environment]::GetEnvironmentVariable($envName)
+        if (-not [string]::IsNullOrWhiteSpace($exeOverride)) {
+            return [IO.Path]::GetFullPath($exeOverride)
+        }
+    }
+
+    $homeAgyExe = [IO.Path]::GetFullPath((Join-Path $HOME '.gemini\bin\agy.exe'))
+    if ([IO.File]::Exists($homeAgyExe)) {
+        return $homeAgyExe
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $localAppAgyExe = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'agy\bin\agy.exe'))
+        if ([IO.File]::Exists($localAppAgyExe)) {
+            return $localAppAgyExe
+        }
+    }
+
+    return (Get-AgyWrapperPath)
+}
+
+function Resolve-AgyExecutable {
+    $path = Get-AgyExecutablePath
+    if (-not [IO.File]::Exists($path)) {
+        throw "ORCHESTRA_EXTERNAL: Agy executable not found: $path"
+    }
+    return $path
+}
+
+function ConvertTo-RedactedProxyUrl {
+    param([string]$Url)
+    if ([string]::IsNullOrWhiteSpace($Url)) { return $null }
+    return ([regex]::Replace($Url, '^([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@]+@', '${1}***@'))
+}
+
+function Get-CodexEssentialConfigOverrides {
+    param(
+        [string]$CodexHome = (Get-OrchestraCodexHome)
+    )
+
+    $modelProvider = 'openai'
+    $forcedLoginMethod = ''
+    $serviceTier = ''
+    $windowsSandbox = 'unelevated'
+    $fastConfigSupported = $true
+    $fallbackReason = $null
+
+    if (-not [string]::IsNullOrWhiteSpace($CodexHome)) {
+        $cfgFile = Join-Path $CodexHome 'config.toml'
+        if ([IO.File]::Exists($cfgFile)) {
+            $section = ''
+            $lines = [IO.File]::ReadAllLines($cfgFile, (New-Object System.Text.UTF8Encoding($false)))
+            $inTripleQuote = $false
+            $tripleDelimiter = ''
+            foreach ($rawLine in $lines) {
+                $lineStr = [string]$rawLine
+                if ($inTripleQuote) {
+                    $closeIdx = $lineStr.IndexOf($tripleDelimiter, [StringComparison]::Ordinal)
+                    if ($closeIdx -ge 0) {
+                        $inTripleQuote = $false
+                        $tripleDelimiter = ''
+                    }
+                    continue
+                }
+
+                $trimmed = $lineStr.Trim()
+                if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed.StartsWith('#')) {
+                    continue
+                }
+                if ($trimmed -match '^\[+([^\[\]]+)\]+\s*(?:#.*)?$') {
+                    $section = $Matches[1].Trim().Replace('"', '').Replace("'", '').ToLowerInvariant()
+                    if (
+                        $section -eq 'model_providers' -or
+                        $section -like 'model_providers.*' -or
+                        $section -eq 'profiles' -or
+                        $section -like 'profiles.*'
+                    ) {
+                        $fastConfigSupported = $false
+                        $fallbackReason = "Unsupported config.toml section [$section]."
+                        break
+                    }
+                    continue
+                }
+
+                if ($trimmed -match '^([A-Za-z0-9_.-]+)\s*=\s*(.+)$') {
+                    $key = $Matches[1].Trim()
+                    $keyLower = $key.ToLowerInvariant()
+                    $rhs = $Matches[2].Trim()
+
+                    $isEssential = (
+                        ($section -eq '' -and $keyLower -in @('model_provider', 'forced_login_method', 'service_tier', 'windows.sandbox')) -or
+                        ($section -eq 'windows' -and $keyLower -eq 'sandbox')
+                    )
+
+                    if (
+                        $section -eq '' -and (
+                            $keyLower -in @('openai_base_url', 'forced_chatgpt_workspace_id', 'cli_auth_credentials_store', 'chatgpt_base_url', 'profile', 'model_providers', 'profiles') -or
+                            $keyLower -like 'model_providers.*' -or
+                            $keyLower -like 'profiles.*'
+                        )
+                    ) {
+                        $fastConfigSupported = $false
+                        $fallbackReason = "Unsupported top-level key '$keyLower' in config.toml."
+                        break
+                    }
+                    if ($section -eq '' -and $keyLower -eq 'windows' -and $rhs -match '^\{') {
+                        $fastConfigSupported = $false
+                        $fallbackReason = 'Inline [windows] table in config.toml is not supported.'
+                        break
+                    }
+
+                    if ($rhs.StartsWith('"""') -or $rhs.StartsWith("'''")) {
+                        $delim = $rhs.Substring(0, 3)
+                        $rest = $rhs.Substring(3)
+                        if ($isEssential) {
+                            $fastConfigSupported = $false
+                            $fallbackReason = "Multiline string in essential key '$keyLower' is not supported."
+                            break
+                        }
+                        $closedOnLine = if ($delim -eq '"""') { $rest -match '(?<!\\)"""' } else { $rest.Contains("'''") }
+                        if (-not $closedOnLine) {
+                            $inTripleQuote = $true
+                            $tripleDelimiter = $delim
+                        }
+                        continue
+                    }
+
+                    if (-not $isEssential) {
+                        continue
+                    }
+
+                    $decoded = $null
+                    if ($rhs -match "^'([^']*)'\s*(?:#.*)?$") {
+                        $decoded = $Matches[1]
+                    }
+                    elseif ($rhs -match '^"((?:[^"\\]|\\.)*)"\s*(?:#.*)?$') {
+                        $rawInner = $Matches[1]
+                        $sb = New-Object System.Text.StringBuilder
+                        $parseOk = $true
+                        for ($idx = 0; $idx -lt $rawInner.Length; $idx++) {
+                            $ch = $rawInner[$idx]
+                            $code = [int][char]$ch
+                            if ($code -lt 32 -or $code -eq 127) {
+                                $parseOk = $false
+                                break
+                            }
+                            if ($ch -eq '\') {
+                                if ($idx + 1 -ge $rawInner.Length) {
+                                    $parseOk = $false
+                                    break
+                                }
+                                $nextCh = $rawInner[$idx + 1]
+                                if ($nextCh -eq '\' -or $nextCh -eq '"') {
+                                    [void]$sb.Append($nextCh)
+                                    $idx++
+                                }
+                                else {
+                                    $parseOk = $false
+                                    break
+                                }
+                            }
+                            else {
+                                [void]$sb.Append($ch)
+                            }
+                        }
+                        if ($parseOk) {
+                            $decoded = $sb.ToString()
+                        }
+                    }
+
+                    if ($null -eq $decoded) {
+                        $fastConfigSupported = $false
+                        $fallbackReason = "Unsupported scalar value or escape sequence for '$keyLower' in config.toml."
+                        break
+                    }
+                    foreach ($c in $decoded.ToCharArray()) {
+                        $cc = [int][char]$c
+                        if ($cc -lt 32 -or $cc -eq 127) {
+                            $fastConfigSupported = $false
+                            $fallbackReason = "Control character in '$keyLower' value in config.toml."
+                            break
+                        }
+                    }
+                    if (-not $fastConfigSupported) { break }
+
+                    $val = $decoded.Trim()
+                    if ($section -eq '') {
+                        switch ($keyLower) {
+                            'model_provider' {
+                                if (-not [string]::IsNullOrWhiteSpace($val)) { $modelProvider = $val }
+                            }
+                            'forced_login_method' { $forcedLoginMethod = $val }
+                            'service_tier' { $serviceTier = $val }
+                            'windows.sandbox' {
+                                if (-not [string]::IsNullOrWhiteSpace($val)) { $windowsSandbox = $val }
+                            }
+                        }
+                    }
+                    elseif ($section -eq 'windows' -and $keyLower -eq 'sandbox') {
+                        if (-not [string]::IsNullOrWhiteSpace($val)) { $windowsSandbox = $val }
+                    }
+                }
+            }
+        }
+    }
+
+    $configArgs = New-Object 'System.Collections.Generic.List[string]'
+    if ($fastConfigSupported) {
+        [void]$configArgs.Add('-c')
+        [void]$configArgs.Add(('model_provider="' + ($modelProvider.Replace('\', '\\').Replace('"', '\"')) + '"'))
+        if (-not [string]::IsNullOrWhiteSpace($forcedLoginMethod)) {
+            [void]$configArgs.Add('-c')
+            [void]$configArgs.Add(('forced_login_method="' + ($forcedLoginMethod.Replace('\', '\\').Replace('"', '\"')) + '"'))
+        }
+        if (-not [string]::IsNullOrWhiteSpace($serviceTier)) {
+            [void]$configArgs.Add('-c')
+            [void]$configArgs.Add(('service_tier="' + ($serviceTier.Replace('\', '\\').Replace('"', '\"')) + '"'))
+        }
+        [void]$configArgs.Add('-c')
+        [void]$configArgs.Add(('windows.sandbox="' + ($windowsSandbox.Replace('\', '\\').Replace('"', '\"')) + '"'))
+    }
+
+    return [ordered]@{
+        fast_config_supported = [bool]$fastConfigSupported
+        fallback_reason       = $fallbackReason
+        model_provider        = $modelProvider
+        forced_login_method   = $forcedLoginMethod
+        service_tier          = $serviceTier
+        windows_sandbox       = $windowsSandbox
+        config_args           = @($configArgs.ToArray())
+    }
 }
 
 function Write-OrchestraResult {
