@@ -11,7 +11,8 @@ $environmentNames = @(
     'MODEL_ORCHESTRA_AGY_WRAPPER', 'MODEL_ORCHESTRA_NOW',
     'MODEL_ORCHESTRA_CODEX', 'MODEL_ORCHESTRA_CODEX_HOME',
     'MODEL_ORCHESTRA_ROTATION_WAIT_MS', 'MODEL_ORCHESTRA_PROXY',
-    'MODEL_ORCHESTRA_SKIP_PROXY_PRECHECK', 'MODEL_ORCHESTRA_FAKE_ALIVE_PIDS'
+    'MODEL_ORCHESTRA_SKIP_PROXY_PRECHECK', 'MODEL_ORCHESTRA_FAKE_ALIVE_PIDS',
+    'MODEL_ORCHESTRA_TEST_STAGGER_MS'
 )
 $savedEnvironment = @{}
 foreach ($name in $environmentNames) {
@@ -1421,29 +1422,33 @@ exit 0
         $baseArguments + @('-Model', 'gemini-4-hydrogen', '-Prompt', 'TEST', '-DryRun')
     )
     Assert-Test 'DryRun exposes pool and pool_limit for all three provider pools' (
-        $dryCodexPool.json.pool -eq 'codex_openai' -and $dryCodexPool.json.pool_limit -eq 2 -and
-        $dryAnthropicPool.json.pool -eq 'agy_anthropic' -and $dryAnthropicPool.json.pool_limit -eq 2 -and
-        $dryGooglePool.json.pool -eq 'agy_google' -and $dryGooglePool.json.pool_limit -eq 6
+        $dryCodexPool.json.pool -eq 'codex_openai' -and $dryCodexPool.json.pool_limit -eq 4 -and
+        $dryAnthropicPool.json.pool -eq 'agy_anthropic' -and $dryAnthropicPool.json.pool_limit -eq 3 -and
+        $dryGooglePool.json.pool -eq 'agy_google' -and $dryGooglePool.json.pool_limit -eq 7
     )
 
     $slotTestState = Join-Path $sandbox 'slot-unit-state'
     $slotPaths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir $slotTestState
     $acquiredLeases = New-Object 'System.Collections.Generic.List[object]'
     try {
-        [void]$acquiredLeases.Add((Acquire-OrchestraPoolSlot -Paths $slotPaths -Pool 'codex_openai' -Limit 2 -InvocationId 'u-c1' -ModelId 'gpt-6-astra' -Channel 'codex' -NoWait))
-        [void]$acquiredLeases.Add((Acquire-OrchestraPoolSlot -Paths $slotPaths -Pool 'codex_openai' -Limit 2 -InvocationId 'u-c2' -ModelId 'gpt-6-astra' -Channel 'codex' -NoWait))
-        [void]$acquiredLeases.Add((Acquire-OrchestraPoolSlot -Paths $slotPaths -Pool 'agy_anthropic' -Limit 2 -InvocationId 'u-a1' -ModelId 'claude-opus-5-5' -Channel 'agy' -NoWait))
-        [void]$acquiredLeases.Add((Acquire-OrchestraPoolSlot -Paths $slotPaths -Pool 'agy_anthropic' -Limit 2 -InvocationId 'u-a2' -ModelId 'claude-opus-5-5' -Channel 'agy' -NoWait))
-        [void]$acquiredLeases.Add((Acquire-OrchestraPoolSlot -Paths $slotPaths -Pool 'agy_google' -Limit 6 -InvocationId 'u-g1' -ModelId 'gemini-4-hydrogen' -Channel 'agy' -NoWait))
+        foreach ($idx in 1..4) {
+            [void]$acquiredLeases.Add((Acquire-OrchestraPoolSlot -Paths $slotPaths -Pool 'codex_openai' -Limit 4 -InvocationId "u-c$idx" -ModelId 'gpt-6-astra' -Channel 'codex' -NoWait))
+        }
+        foreach ($idx in 1..3) {
+            [void]$acquiredLeases.Add((Acquire-OrchestraPoolSlot -Paths $slotPaths -Pool 'agy_anthropic' -Limit 3 -InvocationId "u-a$idx" -ModelId 'claude-opus-5-5' -Channel 'agy' -NoWait))
+        }
+        foreach ($idx in 1..2) {
+            [void]$acquiredLeases.Add((Acquire-OrchestraPoolSlot -Paths $slotPaths -Pool 'agy_google' -Limit 7 -InvocationId "u-g$idx" -ModelId 'gemini-4-hydrogen' -Channel 'agy' -NoWait))
+        }
         $activeSnap = Get-ActivePoolSlotStatus -Paths $slotPaths
-        Assert-Test 'Simultaneous slots acquire across all pools without cross-blocking' (
-            $activeSnap.total_active -eq 5 -and
+        Assert-Test 'Simultaneous slots acquire across all pools (4/3/7) without cross-blocking' (
+            $activeSnap.total_active -eq 9 -and
             $activeSnap.underutilized -eq $false -and
-            $activeSnap.pools.codex_openai.active -eq 2 -and
+            $activeSnap.pools.codex_openai.active -eq 4 -and
             $activeSnap.pools.codex_openai.available -eq 0 -and
-            $activeSnap.pools.agy_anthropic.active -eq 2 -and
+            $activeSnap.pools.agy_anthropic.active -eq 3 -and
             $activeSnap.pools.agy_anthropic.available -eq 0 -and
-            $activeSnap.pools.agy_google.active -eq 1 -and
+            $activeSnap.pools.agy_google.active -eq 2 -and
             $activeSnap.pools.agy_google.available -eq 5
         )
     }
@@ -1501,15 +1506,20 @@ exit 0
     [void][IO.Directory]::CreateDirectory($capPaths.Slots)
     $fakeLease1 = Join-Path $capPaths.Slots 'codex_openai-1.json'
     $fakeLease2 = Join-Path $capPaths.Slots 'codex_openai-2.json'
-    Write-JsonAtomic -Path $fakeLease1 -Object @{
-        invocation_id = 'fake-c1'; pid = 999901; pool = 'codex_openai'; slot = 1
-        model = 'gpt-6-astra'; channel = 'codex'; started_utc = (Get-OrchestraNow).ToString('o')
+    $fakeLease3 = Join-Path $capPaths.Slots 'codex_openai-3.json'
+    $fakeLease4 = Join-Path $capPaths.Slots 'codex_openai-4.json'
+    foreach ($pair in @(
+        @{ Path = $fakeLease1; Id = 'fake-c1'; Pid = 999901; Slot = 1 },
+        @{ Path = $fakeLease2; Id = 'fake-c2'; Pid = 999902; Slot = 2 },
+        @{ Path = $fakeLease3; Id = 'fake-c3'; Pid = 999903; Slot = 3 },
+        @{ Path = $fakeLease4; Id = 'fake-c4'; Pid = 999904; Slot = 4 }
+    )) {
+        Write-JsonAtomic -Path $pair.Path -Object @{
+            invocation_id = $pair.Id; pid = $pair.Pid; pool = 'codex_openai'; slot = $pair.Slot
+            model = 'gpt-6-astra'; channel = 'codex'; started_utc = (Get-OrchestraNow).ToString('o')
+        }
     }
-    Write-JsonAtomic -Path $fakeLease2 -Object @{
-        invocation_id = 'fake-c2'; pid = 999902; pool = 'codex_openai'; slot = 2
-        model = 'gpt-6-astra'; channel = 'codex'; started_utc = (Get-OrchestraNow).ToString('o')
-    }
-    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_FAKE_ALIVE_PIDS', '999901,999902')
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_FAKE_ALIVE_PIDS', '999901,999902,999903,999904')
 
     $noWaitFail = Invoke-TestScript -Script $invokeScript -Arguments @(
         '-RegistryPath', $fixtureRegistry, '-StateDir', $capState,
@@ -1519,12 +1529,18 @@ exit 0
         '-RegistryPath', $fixtureRegistry, '-StateDir', $capState,
         '-WorkDir', $sandbox, '-Model', 'claude-opus-5-5', '-Prompt', 'TEST_SUCCESS', '-NoSlotWait'
     )
-    Assert-Test 'Full codex_openai pool fails fast (exit 5) with -NoSlotWait while agy_anthropic runs unblocked' (
+    $googlePoolOk = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $capState,
+        '-WorkDir', $sandbox, '-Model', 'gemini-4-hydrogen', '-Prompt', 'TEST_SUCCESS', '-NoSlotWait'
+    )
+    Assert-Test 'Full codex_openai pool (4/4) fails fast (exit 5) with -NoSlotWait while agy_anthropic (3) and agy_google (7) stay unblocked' (
         $noWaitFail.code -eq 5 -and
         [string]$noWaitFail.json.error -match 'ORCHESTRA_LOCK_TIMEOUT' -and
         $otherPoolOk.code -eq 0 -and
         $otherPoolOk.json.pool -eq 'agy_anthropic' -and
-        [IO.File]::Exists($fakeLease1) -and [IO.File]::Exists($fakeLease2)
+        $googlePoolOk.code -eq 0 -and
+        $googlePoolOk.json.pool -eq 'agy_google' -and
+        [IO.File]::Exists($fakeLease1) -and [IO.File]::Exists($fakeLease4)
     )
 
     $queueStatusPath = Join-Path $sandbox 'queued-status.json'
@@ -1577,7 +1593,7 @@ exit 0
         $sawQueued -and $qExited -and $qProc.ExitCode -eq 0 -and
         $null -ne $qJson -and $qJson.pool -eq 'codex_openai' -and
         [double]$qJson.slot_wait_sec -gt 0 -and
-        $postQueueSnap.pools.codex_openai.active -eq 1
+        $postQueueSnap.pools.codex_openai.active -eq 3
     )
     $qProc.Dispose()
     [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_FAKE_ALIVE_PIDS', $null)
@@ -1759,6 +1775,89 @@ exit 0
         $uallRun.json.files_count -eq 4 -and
         $uallText.Contains('newdir/sub1.txt') -and
         $uallText.Contains('newdir/sub2.txt')
+    )
+
+    # (g) AIMD Codex Rotation Cooldown: caps codex_openai to 1, blocks 2nd -NoSlotWait with exit 5, clears on thread.started and expires cleanly
+    $aimdState = Join-Path $sandbox 'aimd-state'
+    $aimdPaths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir $aimdState
+    Set-OrchestraCodexRotationCooldown -Paths $aimdPaths -CooldownSec 15 -Reason 'test_aimd'
+    $aimdStatus = Get-ActivePoolSlotStatus -Paths $aimdPaths
+    $aimdMetaFile = Join-Path $aimdPaths.Slots '_codex_rotation_cooldown.meta'
+    $aimdJsonFiles = [IO.Directory]::GetFiles($aimdPaths.Slots, '*.json').Length
+    $aimdFakeLease = Join-Path $aimdPaths.Slots 'codex_openai-1.json'
+    Write-JsonAtomic -Path $aimdFakeLease -Object @{
+        invocation_id = 'aimd-busy-1'; pid = 999911; pool = 'codex_openai'; slot = 1
+        model = 'gpt-6-astra'; channel = 'codex'; started_utc = (Get-OrchestraNow).ToString('o')
+    }
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_FAKE_ALIVE_PIDS', '999911')
+    $aimdBlockedRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $aimdState,
+        '-WorkDir', $sandbox, '-Model', 'gpt-6-astra', '-Prompt', 'SUCCESS_TEXT', '-NoSlotWait'
+    )
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_NOW', '2026-11-10T12:00:20Z')
+    $aimdExpiredSnap = Get-ActivePoolSlotStatus -Paths $aimdPaths
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_NOW', '2026-11-10T12:00:00Z')
+    [IO.File]::Delete($aimdFakeLease)
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_FAKE_ALIVE_PIDS', $null)
+
+    # Also verify live thread.started clears cooldown and terminal quota re-arms cooldown
+    Set-OrchestraCodexRotationCooldown -Paths $aimdPaths -CooldownSec 15 -Reason 'pre_thread_started'
+    $aimdHome = Join-Path $sandbox 'aimd-codex-home'
+    [void][IO.Directory]::CreateDirectory($aimdHome)
+    [IO.File]::WriteAllBytes((Join-Path $aimdHome 'auth.json'), $script:OrchestraUtf8.GetBytes('{"fixture":"aimd"}'))
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME', $aimdHome)
+    $aimdClearedRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $aimdState,
+        '-WorkDir', $sandbox, '-Model', 'gpt-6-astra', '-Prompt', 'SUCCESS_TEXT', '-NoSlotWait'
+    )
+    $afterClearCooldown = Test-OrchestraCodexRotationCooldown -Paths $aimdPaths
+    $aimdQuotaRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $aimdState,
+        '-WorkDir', $sandbox, '-Model', 'gpt-6-astra', '-Prompt', 'ALL_QUOTA', '-NoSlotWait'
+    )
+    $afterQuotaCooldown = Test-OrchestraCodexRotationCooldown -Paths $aimdPaths
+    $afterQuotaStatus = Get-ActivePoolSlotStatus -Paths $aimdPaths
+    Assert-Test 'AIMD rotation cooldown caps codex_openai to 1, keeps .meta outside *.json, auto-expires, clears on thread.started, and sets on quota' (
+        $aimdStatus.pools.codex_openai.limit -eq 1 -and
+        $aimdStatus.pools.codex_openai.configured_limit -eq 4 -and
+        $aimdStatus.pools.codex_openai.rotation_cooldown -eq $true -and
+        [IO.File]::Exists($aimdMetaFile) -and
+        $aimdJsonFiles -eq 0 -and
+        $aimdBlockedRun.code -eq 5 -and
+        $aimdExpiredSnap.pools.codex_openai.limit -eq 4 -and
+        $aimdExpiredSnap.pools.codex_openai.rotation_cooldown -eq $false -and
+        $aimdExpiredSnap.pools.codex_openai.available -eq 3 -and
+        $aimdClearedRun.code -eq 0 -and
+        (-not $afterClearCooldown) -and
+        $aimdQuotaRun.code -eq 4 -and
+        $afterQuotaCooldown -and
+        $afterQuotaStatus.pools.codex_openai.limit -eq 1
+    )
+
+    # (h) Launch Stagger: 1st slot has 0ms stagger; 2nd concurrent slot in agy_google staggers by ~180ms without leaving .json junk
+    $staggerState = Join-Path $sandbox 'stagger-state'
+    $staggerPaths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir $staggerState
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_TEST_STAGGER_MS', '180')
+    $stg1 = $null
+    $stg2 = $null
+    try {
+        $stg1 = Acquire-OrchestraPoolSlot -Paths $staggerPaths -Pool 'agy_google' -Limit 7 -InvocationId 'stg-1' -ModelId 'gemini-4-hydrogen' -Channel 'agy' -NoWait
+        $stgSw = [Diagnostics.Stopwatch]::StartNew()
+        $stg2 = Acquire-OrchestraPoolSlot -Paths $staggerPaths -Pool 'agy_google' -Limit 7 -InvocationId 'stg-2' -ModelId 'gemini-4-hydrogen' -Channel 'agy' -NoWait
+        $stgSw.Stop()
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_TEST_STAGGER_MS', $null)
+        if ($null -ne $stg1) { Release-OrchestraPoolSlot -Paths $staggerPaths -LeasePath ([string]$stg1.lease_path) -InvocationId 'stg-1' }
+        if ($null -ne $stg2) { Release-OrchestraPoolSlot -Paths $staggerPaths -LeasePath ([string]$stg2.lease_path) -InvocationId 'stg-2' }
+    }
+    $staggerMetaFile = Join-Path $staggerPaths.Slots '_stagger_agy_google.meta'
+    Assert-Test 'Launch stagger skips 1st active slot (0ms) and staggers 2nd concurrent slot via .meta without .json junk' (
+        $null -ne $stg1 -and [int]$stg1.stagger_ms -eq 0 -and
+        $null -ne $stg2 -and [int]$stg2.stagger_ms -ge 100 -and
+        $stgSw.ElapsedMilliseconds -ge 90 -and
+        [IO.File]::Exists($staggerMetaFile) -and
+        [IO.Directory]::GetFiles($staggerPaths.Slots, '*.json').Length -eq 0
     )
 }
 catch {

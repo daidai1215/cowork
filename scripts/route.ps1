@@ -80,7 +80,7 @@ function Get-RPoolLoad {
         $Registry,
         [string[]]$BusyAgents = @()
     )
-    $defaultLimits = [ordered]@{ codex_openai = 2; agy_anthropic = 2; agy_google = 6 }
+    $defaultLimits = [ordered]@{ codex_openai = 4; agy_anthropic = 3; agy_google = 7 }
     $limitsObj = Get-RValue $Policy 'pool_concurrency_limits' $null
     $limits = [ordered]@{}
     foreach ($pKey in @('codex_openai', 'agy_anthropic', 'agy_google')) {
@@ -96,6 +96,8 @@ function Get-RPoolLoad {
         foreach ($pKey in @('codex_openai', 'agy_anthropic', 'agy_google')) {
             $rp = Get-RValue $rawPools $pKey $null
             $lim = if ($null -ne $rp) { [int](Get-RValue $rp 'limit' $limits[$pKey]) } else { [int]$limits[$pKey] }
+            $cfgLim = if ($null -ne $rp) { [int](Get-RValue $rp 'configured_limit' $limits[$pKey]) } else { [int]$limits[$pKey] }
+            $rotCd = if ($null -ne $rp) { [bool](Get-RValue $rp 'rotation_cooldown' $false) } else { $false }
             $act = if ($null -ne $rp) { [int](Get-RValue $rp 'active' 0) } else { 0 }
             $avail = if ($null -ne $rp) { [int](Get-RValue $rp 'available' ([Math]::Max(0, $lim - $act))) } else { [Math]::Max(0, $lim - $act) }
             $mods = New-Object 'System.Collections.Generic.List[string]'
@@ -107,7 +109,9 @@ function Get-RPoolLoad {
             $pools[$pKey] = [ordered]@{
                 active = $act
                 limit = $lim
+                configured_limit = $cfgLim
                 available = $avail
+                rotation_cooldown = $rotCd
                 models = $mods
             }
             $totalActive += $act
@@ -119,7 +123,9 @@ function Get-RPoolLoad {
             $pools[$pKey] = [ordered]@{
                 active = 0
                 limit = $lim
+                configured_limit = $lim
                 available = $lim
+                rotation_cooldown = $false
                 models = (New-Object 'System.Collections.Generic.List[string]')
             }
         }
@@ -174,7 +180,9 @@ function Get-RPoolLoad {
         $finalPools[$pKey] = [ordered]@{
             active = [int]$ep.active
             limit = [int]$ep.limit
+            configured_limit = [int]$ep.configured_limit
             available = [int]$ep.available
+            rotation_cooldown = [bool]$ep.rotation_cooldown
             models = @($ep.models.ToArray())
         }
     }
@@ -1199,7 +1207,7 @@ try {
         'underutilized_capacity: activate idle pools concurrently (Astra + Opus + 4H) across disjoint prefixes & TDM micro-slices'
     }
     elseif ($codexAvail -le 0) {
-        'codex_pool_saturated: queue TDM <=2 slots or offload non-min_cap slices to 4H Extra'
+        'codex_pool_saturated: queue TDM <=4 slots (AIMD 1 during rotation) or offload non-min_cap slices to 4H Extra'
     }
     else {
         'balanced_multi_pool'

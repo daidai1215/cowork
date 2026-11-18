@@ -5,7 +5,7 @@
 ## 当前主力阵容（默认 `peak` 极致性能 / 三档主控感知分层）
 
 <!-- AUTO:ROSTER:START -->
-> 自动同步自 `registry/models.json` (`registry_rev: 9`, 活跃模型: 4)
+> 自动同步自 `registry/models.json` (`registry_rev: 10`, 活跃模型: 4)
 
 | 模型 | ID / 通道 | 默认档位 | 顶级长板（>=9） | 额度 (`quota_rank`) | 速度 (`speed_rank`) | 运行特性 |
 |---|---|---|---|---|---|---|
@@ -16,7 +16,7 @@
 
 - **可用额度排序（低 → 高）**: Claude Opus 5.5 (`claude-opus-5-5`) < GPT-6.2 Astra (`gpt-6.2-astra`) < Gemini 4 Carbon (`gemini-4-carbon`) < Gemini 4 Hydrogen (`gemini-4-hydrogen`)
 - **响应速度排序（快 → 慢）**: Gemini 4 Hydrogen (`gemini-4-hydrogen`) > Claude Opus 5.5 (`claude-opus-5-5`) > Gemini 4 Carbon (`gemini-4-carbon`) > GPT-6.2 Astra (`gpt-6.2-astra`)
-- **通道池并发上限 (`pool_concurrency_limits`)**: `codex_openai` <= 2, `agy_anthropic` <= 2, `agy_google` <= 6
+- **通道池并发上限 (`pool_concurrency_limits`)**: `codex_openai` <= 4, `agy_anthropic` <= 3, `agy_google` <= 7
 <!-- AUTO:ROSTER:END -->
 
 ### 标准能力别名与自动路由速查
@@ -112,13 +112,13 @@ cowork/
    - `hydrogen_max` (`-HostModel hydrogen`)：Gemini 侧 100% 由 `4H` 执行（推理/编码 `xhigh`、机械 `high`），仅 `paper/essay/copywriting/architecture` 或 `-AllowEscalation` 触发 `final_reviewer = gemini-4-carbon` 终审。
 3. **Antigravity 共享池认知 & 单点 Swarm `gatekeeper`**：
    - **Gemini 共享池**：`Carbon` 与 `4H` 同属 Antigravity Gemini 池，分流 `4H` 主要换取 **2.5 倍吞吐速度与低延迟**；**Claude 独立稀缺池**：`Opus 5.5` 只审截图 Aesthetic Gate 或 ≤ 800 字终裁，严禁主写或整池开 Worker；**Codex 外部池**：`GPT-6.2 Astra` 走独立 Codex + Cockpit 自动切号，不耗 Antigravity 配额；
-   - `/swarm` 中通过 **1 名单点 `gatekeeper`（`rigor-gate`）** 集中调 `gpt-6.2-astra`（≤1~2 路防 Cockpit 抢锁）与 `claude-opus-5-5`。
+   - `/swarm` 中通过 **1 名单点 `gatekeeper`（`rigor-gate`）** 集中调 `gpt-6.2-astra`（官方直连平时可并发 `<= 4` 路，AIMD 遇 429/切号锁自动 `15s` 收口 1 槽保护、接通即弹回 `4` 槽）与 `claude-opus-5-5`（`<= 3` 路并行审图/终裁）。
 4. **Context & KV Prefix Cache Protocol**：
    - **静态包前置**：多文件任务先用 `4H High` 生成 `<scratch>/context_pack.md`，调用 `invoke-model.ps1` 时传 `-ContextFiles` 将其固定置顶于 `=====TASK_INSTRUCTIONS=====` 之前，吃满前缀 KV 缓存；
    - **默认静默 stdout 与遥测**：`invoke-model.ps1` 默认静默不打印中间流 JSON（完整事件写 `$HOME\.cowork\live\<id>.events.jsonl`，7 天清理；仅排障加 `-StreamStdout`），并在 `usage` / `usage.jsonl` 采集 `cached_tokens` 与 `cache_hit_rate`；
-   - **`-Resume` 边界、Swarm 复用与日志节流**：窄域同会话续问用 `-Resume`，独立 Verifier / 切号后开新会话 + `-ContextFiles`；Swarm 同探索前缀用 `fork` 吃热缓存，可复用 Worker 留 `waiting`（0 耗），按 `#seq` 与单向 `@peer` 隔离看板；长测试输出写日志只摘 `<= 20` 行入主对话。
+   - **`-Resume` 边界、Swarm 复用与日志节流**：仅单路串行窄域续问用 `-Resume`，**并发 Worker/子会话严禁共享同一 `-Resume`**（独立 Verifier / 并行分片 / 切号后统一开新会话 + 共享 `-ContextFiles`）；Swarm 同探索前缀用 `fork` 吃热缓存，可复用 Worker 留 `waiting`（0 耗），按 `#seq` 与单向 `@peer` 隔离看板；长测试输出写日志只摘 `<= 20` 行入主对话。
 5. **多池负载均衡、LPT 调度与 SDM/TDM 切片**：
-   - **三池槽位限流与排队（`invoke-model.ps1 -SlotWaitSec -NoSlotWait`）**：基于 `$HOME\.cowork\slots` 实施三池并发配额（`agy_google <=6`、`codex_openai <=2`、`agy_anthropic <=2`），支持死 PID / 陈旧租约自动回收；满槽默认在启动前进入 `queued_slot` 排队并上报 `pool` 与 `slot_wait_sec`（Codex 首包握手计时在获槽后开始），传 `-NoSlotWait` 立即返回退出码 `5`；
+   - **三池槽位限流、AIMD 切号门控与 200ms 错峰（`invoke-model.ps1 -SlotWaitSec -NoSlotWait`）**：基于 `$HOME\.cowork\slots` 实施三池并发配额（`agy_google <=7`、`codex_openai <=4`、`agy_anthropic <=3`），支持死 PID / 陈旧租约自动回收；池内已有活跃进程时自动错峰 `~200ms`（`policy.launch_stagger_ms`）发车，避免 TLS 握手尖峰与 `.codex/*.sqlite` WAL 争抢；遇 `429`/Cockpit 切号瞬时收口 `codex_openai` 至 `1` 槽冷却 `15s`（`codex_rotation_cooldown_sec`），`thread.started` 接通即弹回 `4` 槽；满槽默认在启动前进入 `queued_slot` 排队并上报 `pool` 与 `slot_wait_sec`（Codex 首包握手计时在获槽后开始），传 `-NoSlotWait` 立即返回退出码 `5`；
    - **多池感知与 LPT 泳道（`route.ps1 -BusyAgents -PreferIdle`）**：叠加实时槽位与 `-BusyAgents` 输出 `orchestration.{pool_load, scale_out_hint, parallel_lanes}`；`-PreferIdle` 在严守 `min_cap` 与 `hard_rules` 前提下将任务切往空闲池，活跃 `< 2` 时按 LPT `T=0` 先发 Astra 并同步拉开 `4H` 互斥分片/`tests/` 与 `Opus` 重叠终裁；
    - **增量审稿打包器（`scripts/pack-context.ps1`）**：支持确定性静态打包（`static_pack`）与 `-GitDiff [-AllowedPrefixes] -TestLogFile <log>`（末尾 `<= 20` 行）增量 Diff 打包，配合本地语法/单测快筛实现三拍重叠微切片流水线。
 

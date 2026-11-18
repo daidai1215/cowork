@@ -886,12 +886,12 @@ try {
             $hCarbSelfReview.Result.orchestration.active_verifier -eq $false
         ) 'hydrogen_max avoids 4H self-review when aesthetic gate falls back and sets active_verifier false on self-review or blocked'
 
-        # 11. Multi-pool concurrency load balancing (-BusyAgents, -PreferIdle, pool_load, scale_out_hint, parallel_lanes, live Slots)
+        # 11. Multi-pool concurrency load balancing (-BusyAgents, -PreferIdle, pool_load, scale_out_hint, parallel_lanes, live Slots, AIMD cooldown)
         Set-RTestExhaustion
         Set-OrchestraProperty $hostPolicy 'pool_concurrency_limits' ([pscustomobject]@{
-            codex_openai = 2
-            agy_anthropic = 2
-            agy_google = 6
+            codex_openai = 4
+            agy_anthropic = 3
+            agy_google = 7
         })
         Set-OrchestraProperty $hostPolicy 'default_mode' 'peak'
         Save-RTestFixture $hostRegistry
@@ -905,14 +905,14 @@ try {
             $pFront.Exit -eq 0 -and
             $pFront.Result.orchestration.pool_load.total_active -eq 0 -and
             $pFront.Result.orchestration.pool_load.underutilized -eq $true -and
-            $pFront.Result.orchestration.pool_load.pools.codex_openai.limit -eq 2 -and
-            $pFront.Result.orchestration.pool_load.pools.agy_anthropic.limit -eq 2 -and
-            $pFront.Result.orchestration.pool_load.pools.agy_google.limit -eq 6 -and
+            $pFront.Result.orchestration.pool_load.pools.codex_openai.limit -eq 4 -and
+            $pFront.Result.orchestration.pool_load.pools.agy_anthropic.limit -eq 3 -and
+            $pFront.Result.orchestration.pool_load.pools.agy_google.limit -eq 7 -and
             ($pFront.Result.orchestration.scale_out_hint -like 'underutilized_capacity:*') -and
             $null -ne $pFrontPrim -and $pFrontPrim.model -eq 'syn-fast' -and $pFrontPrim.pool -eq 'agy_google' -and
             $null -ne $pFrontCodex -and $pFrontCodex.model -eq 'syn-rigor' -and $pFrontCodex.pool -eq 'codex_openai' -and
             $null -ne $pFrontAes -and $pFrontAes.model -eq 'syn-aesthetic' -and $pFrontAes.pool -eq 'agy_anthropic'
-        ) 'frontend orchestrator emits pool_load, underutilized scale_out_hint, and 3-pool parallel_lanes'
+        ) 'frontend orchestrator emits 7/4/3 pool_load, underutilized scale_out_hint, and 3-pool parallel_lanes'
 
         $pBug = Invoke-RTest 'bugfix' -ModeName 'peak'
         $pBugLanes = @($pBug.Result.orchestration.parallel_lanes)
@@ -926,13 +926,18 @@ try {
             $null -ne $pBugRev -and $pBugRev.model -eq 'syn-prose' -and ($pBugRev.scope -match 'tie-break')
         ) 'backend/bugfix emits LPT critical_primary, parallel fast Google tests lane, and TDM delta review lane'
 
-        $pSatNoPref = Invoke-RTest 'bugfix' -ModeName 'peak' -BusyAgents 'syn-rigor,syn-rigor'
-        $pSatBug = Invoke-RTest 'bugfix' -ModeName 'peak' -BusyAgents 'syn-rigor,syn-rigor' -PreferIdle
-        $pSatMath = Invoke-RTest 'math' -ModeName 'peak' -BusyAgents 'syn-rigor,syn-rigor' -PreferIdle
+        $pTwoBusy = Invoke-RTest 'bugfix' -ModeName 'peak' -BusyAgents 'syn-rigor,syn-rigor' -PreferIdle
+        $pSatNoPref = Invoke-RTest 'bugfix' -ModeName 'peak' -BusyAgents 'syn-rigor,syn-rigor,syn-rigor,syn-rigor'
+        $pSatBug = Invoke-RTest 'bugfix' -ModeName 'peak' -BusyAgents 'syn-rigor,syn-rigor,syn-rigor,syn-rigor' -PreferIdle
+        $pSatMath = Invoke-RTest 'math' -ModeName 'peak' -BusyAgents 'syn-rigor,syn-rigor,syn-rigor,syn-rigor' -PreferIdle
         Assert-RTest (
+            $pTwoBusy.Exit -eq 0 -and
+            $pTwoBusy.Result.primary -eq 'syn-rigor' -and
+            $pTwoBusy.Result.orchestration.pool_load.pools.codex_openai.available -eq 2 -and
+            $pTwoBusy.Result.orchestration.scale_out_hint -eq 'balanced_multi_pool' -and
             $pSatNoPref.Exit -eq 0 -and
             $pSatNoPref.Result.primary -eq 'syn-rigor' -and
-            $pSatNoPref.Result.orchestration.pool_load.total_active -eq 2 -and
+            $pSatNoPref.Result.orchestration.pool_load.total_active -eq 4 -and
             $pSatNoPref.Result.orchestration.pool_load.underutilized -eq $false -and
             $pSatNoPref.Result.orchestration.pool_load.pools.codex_openai.available -eq 0 -and
             ($pSatNoPref.Result.orchestration.scale_out_hint -like 'codex_pool_saturated:*') -and
@@ -942,35 +947,73 @@ try {
             (($pSatBug.Result.reasons -join ' ') -match 'load_balance: shifted primary from saturated pool to idle pool') -and
             $pSatMath.Exit -eq 0 -and
             $pSatMath.Result.primary -eq 'syn-rigor'
-        ) 'BusyAgents + PreferIdle shifts non-min_cap bugfix off saturated codex_openai while preserving math min_cap=9'
+        ) 'BusyAgents + PreferIdle allows 2 busy codex slots and shifts non-min_cap bugfix at 4 while preserving math min_cap=9'
 
-        $slotLease1 = $null
-        $slotLease2 = $null
+        $slotLeases = @()
         try {
-            $slotLease1 = Acquire-OrchestraPoolSlot -Paths $script:routePaths -Pool 'codex_openai' -Limit 2 -InvocationId 'route-slot-1' -ModelId 'syn-rigor' -Channel 'codex' -NoWait
-            $slotLease2 = Acquire-OrchestraPoolSlot -Paths $script:routePaths -Pool 'codex_openai' -Limit 2 -InvocationId 'route-slot-2' -ModelId 'syn-rigor' -Channel 'codex' -NoWait
+            for ($si = 1; $si -le 4; $si++) {
+                $slotLeases += Acquire-OrchestraPoolSlot -Paths $script:routePaths -Pool 'codex_openai' -Limit 4 -InvocationId "route-slot-$si" -ModelId 'syn-rigor' -Channel 'codex' -NoWait
+            }
             $pLiveSlot = Invoke-RTest 'bugfix' -ModeName 'peak' -PreferIdle
             Assert-RTest (
                 $pLiveSlot.Exit -eq 0 -and
-                $pLiveSlot.Result.orchestration.pool_load.pools.codex_openai.active -eq 2 -and
+                $pLiveSlot.Result.orchestration.pool_load.pools.codex_openai.active -eq 4 -and
                 $pLiveSlot.Result.orchestration.pool_load.pools.codex_openai.available -eq 0 -and
                 ($pLiveSlot.Result.orchestration.scale_out_hint -like 'codex_pool_saturated:*') -and
                 $pLiveSlot.Result.primary -eq 'syn-prose'
-            ) 'live Slots lease saturation triggers PreferIdle load balance without BusyAgents'
+            ) 'live 4-slot codex lease saturation triggers PreferIdle load balance without BusyAgents'
         }
         finally {
-            if ($null -ne $slotLease1) {
-                Release-OrchestraPoolSlot -Paths $script:routePaths -LeasePath $slotLease1.lease_path -InvocationId 'route-slot-1'
+            for ($si = 0; $si -lt $slotLeases.Count; $si++) {
+                $sl = $slotLeases[$si]
+                if ($null -ne $sl) {
+                    Release-OrchestraPoolSlot -Paths $script:routePaths -LeasePath $sl.lease_path -InvocationId "route-slot-$($si + 1)"
+                }
             }
-            if ($null -ne $slotLease2) {
-                Release-OrchestraPoolSlot -Paths $script:routePaths -LeasePath $slotLease2.lease_path -InvocationId 'route-slot-2'
+        }
+
+        $aimdLease = $null
+        try {
+            Set-OrchestraCodexRotationCooldown -Paths $script:routePaths -CooldownSec 15 -Reason 'test_rotation' | Out-Null
+            $aimdLease = Acquire-OrchestraPoolSlot -Paths $script:routePaths -Pool 'codex_openai' -Limit 4 -InvocationId 'route-aimd-1' -ModelId 'syn-rigor' -Channel 'codex' -NoWait
+            $pAimdCap = Invoke-RTest 'bugfix' -ModeName 'peak' -PreferIdle
+            $pAimdSaturatedHint = Invoke-RTest 'bugfix' -ModeName 'peak' -BusyAgents 'syn-prose' -PreferIdle
+            Assert-RTest (
+                $pAimdCap.Exit -eq 0 -and
+                $pAimdCap.Result.orchestration.pool_load.pools.codex_openai.limit -eq 1 -and
+                $pAimdCap.Result.orchestration.pool_load.pools.codex_openai.configured_limit -eq 4 -and
+                $pAimdCap.Result.orchestration.pool_load.pools.codex_openai.rotation_cooldown -eq $true -and
+                $pAimdCap.Result.orchestration.pool_load.pools.codex_openai.available -eq 0 -and
+                ($pAimdCap.Result.orchestration.scale_out_hint -like 'underutilized_capacity:*') -and
+                $pAimdCap.Result.primary -eq 'syn-prose' -and
+                $pAimdSaturatedHint.Exit -eq 0 -and
+                $pAimdSaturatedHint.Result.orchestration.pool_load.total_active -eq 2 -and
+                ($pAimdSaturatedHint.Result.orchestration.scale_out_hint -like 'codex_pool_saturated:*') -and
+                ($pAimdSaturatedHint.Result.orchestration.scale_out_hint -match 'AIMD 1') -and
+                $pAimdSaturatedHint.Result.primary -eq 'syn-prose'
+            ) 'AIMD cooldown caps codex_openai limit to 1 and triggers PreferIdle after 1 active lease'
+
+            Clear-OrchestraCodexRotationCooldown -Paths $script:routePaths | Out-Null
+            $pAimdCleared = Invoke-RTest 'bugfix' -ModeName 'peak' -PreferIdle
+            Assert-RTest (
+                $pAimdCleared.Exit -eq 0 -and
+                $pAimdCleared.Result.orchestration.pool_load.pools.codex_openai.limit -eq 4 -and
+                $pAimdCleared.Result.orchestration.pool_load.pools.codex_openai.rotation_cooldown -eq $false -and
+                $pAimdCleared.Result.orchestration.pool_load.pools.codex_openai.available -eq 3 -and
+                $pAimdCleared.Result.primary -eq 'syn-rigor'
+            ) 'clearing AIMD cooldown restores codex_openai limit to 4 and resumes Astra primary'
+        }
+        finally {
+            try { Clear-OrchestraCodexRotationCooldown -Paths $script:routePaths | Out-Null } catch {}
+            if ($null -ne $aimdLease) {
+                Release-OrchestraPoolSlot -Paths $script:routePaths -LeasePath $aimdLease.lease_path -InvocationId 'route-aimd-1'
             }
         }
 
         $noFastRegistry = Copy-RTestFixture $hostRegistry
         Set-OrchestraProperty $noFastRegistry 'models' @($noFastRegistry.models | Where-Object { [string]$_.id -ne 'syn-fast' })
         Save-RTestFixture $noFastRegistry
-        $pNoFastShift = Invoke-RTest 'bugfix' -ModeName 'carbon_peak' -BusyAgents 'syn-rigor,syn-rigor' -PreferIdle
+        $pNoFastShift = Invoke-RTest 'bugfix' -ModeName 'carbon_peak' -BusyAgents 'syn-rigor,syn-rigor,syn-rigor,syn-rigor' -PreferIdle
         Assert-RTest (
             $pNoFastShift.Exit -eq 0 -and
             $pNoFastShift.Result.primary -eq 'syn-prose' -and

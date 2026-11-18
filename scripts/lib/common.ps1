@@ -1591,9 +1591,9 @@ function Get-OrchestraPoolName {
 function Get-OrchestraPoolLimits {
     param($Policy = $null)
     $limits = [ordered]@{
-        codex_openai = 2
-        agy_anthropic = 2
-        agy_google = 6
+        codex_openai = 4
+        agy_anthropic = 3
+        agy_google = 7
     }
     if ($null -ne $Policy) {
         $cfg = Get-OrchestraProperty $Policy 'pool_concurrency_limits' $null
@@ -1626,6 +1626,92 @@ function Test-OrchestraPidAlive {
         }
     }
     return ($null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue))
+}
+
+function Set-OrchestraCodexRotationCooldown {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Paths,
+        [int]$CooldownSec = 15,
+        [string]$Reason = 'cockpit_rotation_or_429'
+    )
+    if ($CooldownSec -le 0) {
+        Clear-OrchestraCodexRotationCooldown -Paths $Paths
+        return
+    }
+    $slotsDir = [string](Get-OrchestraProperty $Paths 'Slots' '')
+    if ([string]::IsNullOrWhiteSpace($slotsDir)) { return }
+    $work = {
+        [void][IO.Directory]::CreateDirectory($slotsDir)
+        $cooldownPath = Join-Path $slotsDir '_codex_rotation_cooldown.meta'
+        $until = (Get-OrchestraNow).AddSeconds($CooldownSec)
+        Write-JsonAtomic -Path $cooldownPath -Object ([ordered]@{
+            until_utc = $until.ToString('o')
+            reason = $Reason
+        })
+    }
+    if (Test-OrchestraLockHeld -Paths $Paths -Name slots) { & $work }
+    else { Invoke-WithLock -Paths $Paths -Name slots -ScriptBlock $work }
+}
+
+function Clear-OrchestraCodexRotationCooldown {
+    param([Parameter(Mandatory = $true)][hashtable]$Paths)
+    $slotsDir = [string](Get-OrchestraProperty $Paths 'Slots' '')
+    if ([string]::IsNullOrWhiteSpace($slotsDir)) { return }
+    $cooldownPath = Join-Path $slotsDir '_codex_rotation_cooldown.meta'
+    if (-not [IO.File]::Exists($cooldownPath)) { return }
+    $work = {
+        if ([IO.File]::Exists($cooldownPath)) {
+            try { [IO.File]::Delete($cooldownPath) } catch {}
+        }
+    }
+    if (Test-OrchestraLockHeld -Paths $Paths -Name slots) { & $work }
+    else { Invoke-WithLock -Paths $Paths -Name slots -ScriptBlock $work }
+}
+
+function Test-OrchestraCodexRotationCooldown {
+    param([Parameter(Mandatory = $true)][hashtable]$Paths)
+    $slotsDir = [string](Get-OrchestraProperty $Paths 'Slots' '')
+    if ([string]::IsNullOrWhiteSpace($slotsDir)) { return $false }
+    $cooldownPath = Join-Path $slotsDir '_codex_rotation_cooldown.meta'
+    if (-not [IO.File]::Exists($cooldownPath)) { return $false }
+    $checkWork = {
+        if (-not [IO.File]::Exists($cooldownPath)) { return $false }
+        $expiredOrCorrupt = $false
+        try {
+            $doc = Read-JsonFile -Path $cooldownPath
+            if ($null -eq $doc) {
+                $expiredOrCorrupt = $true
+            }
+            else {
+                $untilText = [string](Get-OrchestraProperty $doc 'until_utc' '')
+                if ([string]::IsNullOrWhiteSpace($untilText)) {
+                    $expiredOrCorrupt = $true
+                }
+                else {
+                    $untilDt = ConvertTo-OrchestraUtc $untilText
+                    if ($untilDt -le (Get-OrchestraNow)) {
+                        $expiredOrCorrupt = $true
+                    }
+                    else {
+                        return $true
+                    }
+                }
+            }
+        }
+        catch {
+            $expiredOrCorrupt = $true
+        }
+        if ($expiredOrCorrupt -and [IO.File]::Exists($cooldownPath)) {
+            try { [IO.File]::Delete($cooldownPath) } catch {}
+        }
+        return $false
+    }
+    if (Test-OrchestraLockHeld -Paths $Paths -Name slots) {
+        return [bool](& $checkWork)
+    }
+    else {
+        return [bool](Invoke-WithLock -Paths $Paths -Name slots -ScriptBlock $checkWork)
+    }
 }
 
 function Get-ActivePoolSlotStatus {
@@ -1720,16 +1806,21 @@ function Get-ActivePoolSlotStatus {
                 }
             }
         }
+        $codexCooldownActive = Test-OrchestraCodexRotationCooldown -Paths $Paths
         $totalActive = 0
         $poolsOut = [ordered]@{}
         foreach ($p in $poolNames) {
             $act = [int]$counts[$p]
-            $lim = [int]$limits[$p]
-            $avail = [int][Math]::Max(0, $lim - $act)
+            $cfgLim = [int]$limits[$p]
+            $isCooldown = ($p -eq 'codex_openai' -and $codexCooldownActive)
+            $effLim = if ($isCooldown) { 1 } else { $cfgLim }
+            $avail = [int][Math]::Max(0, $effLim - $act)
             $totalActive += $act
             $poolsOut[$p] = [ordered]@{
                 active = $act
-                limit = $lim
+                limit = $effLim
+                configured_limit = $cfgLim
+                rotation_cooldown = [bool]$isCooldown
                 available = $avail
                 models = @($modelsMap[$p].ToArray())
                 slots = @($slotsMap[$p].ToArray())
@@ -1761,6 +1852,7 @@ function Acquire-OrchestraPoolSlot {
         [string]$ModelId = '',
         [string]$Channel = '',
         [int]$WaitSec = 300,
+        [int]$StaggerMs = 200,
         [switch]$NoWait,
         [scriptblock]$OnQueued = $null
     )
@@ -1774,19 +1866,41 @@ function Acquire-OrchestraPoolSlot {
     if ([string]::IsNullOrWhiteSpace($slotsDir)) {
         throw 'ORCHESTRA_ARGS: Missing Paths.Slots.'
     }
+    $effectiveStaggerMs = if ($StaggerMs -gt 0) { $StaggerMs } else { 0 }
+    $envTestStagger = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_TEST_STAGGER_MS')
+    $hasTestStaggerEnv = $false
+    if (-not [string]::IsNullOrWhiteSpace($envTestStagger)) {
+        $parsedStagger = 0
+        if ([int]::TryParse($envTestStagger.Trim(), [ref]$parsedStagger) -and $parsedStagger -ge 0) {
+            $effectiveStaggerMs = $parsedStagger
+            $hasTestStaggerEnv = $true
+        }
+    }
+    $staggerAllowed = ($effectiveStaggerMs -gt 0) -and (
+        $hasTestStaggerEnv -or
+        [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_NOW'))
+    )
+
     $slotWatch = [Diagnostics.Stopwatch]::StartNew()
     $notifiedQueued = $false
+    $lastEffectiveLimit = $Limit
     try {
         while ($true) {
             $lockTimeout = if ($NoWait -or $WaitSec -le 0) { 1 } else { [Math]::Min(10, $WaitSec) }
-            $acquired = Invoke-WithLock -Paths $Paths -Name slots -TimeoutSec $lockTimeout -ScriptBlock {
+            $attemptRes = Invoke-WithLock -Paths $Paths -Name slots -TimeoutSec $lockTimeout -ScriptBlock {
                 [void][IO.Directory]::CreateDirectory($slotsDir)
                 $status = Get-ActivePoolSlotStatus -Paths $Paths -CleanupStale
                 $poolInfo = $status.pools[$Pool]
-                if ([int]$poolInfo.active -lt $Limit) {
+                $effectiveLimit = if ($Pool -eq 'codex_openai' -and [bool]$poolInfo.rotation_cooldown) {
+                    1
+                }
+                else {
+                    $Limit
+                }
+                if ([int]$poolInfo.active -lt $effectiveLimit) {
                     $takenSlots = @($poolInfo.slots)
                     $chosenSlot = 0
-                    for ($i = 1; $i -le $Limit; $i++) {
+                    for ($i = 1; $i -le $effectiveLimit; $i++) {
                         $candPath = Join-Path $slotsDir ("$Pool-$i.json")
                         if (($takenSlots -notcontains $i) -and -not [IO.File]::Exists($candPath)) {
                             $chosenSlot = $i
@@ -1805,21 +1919,70 @@ function Acquire-OrchestraPoolSlot {
                             started_utc = (Get-OrchestraNow).ToString('o')
                         }
                         Write-JsonAtomic -Path $leasePath -Object $leaseObj
+
+                        $delayMs = 0
+                        if ($staggerAllowed) {
+                            $staggerPath = Join-Path $slotsDir ("_stagger_$Pool.meta")
+                            $nowTicks = [DateTime]::UtcNow.Ticks
+                            if ([int]$poolInfo.active -ge 1) {
+                                $lastLaunchTicks = $nowTicks
+                                if ([IO.File]::Exists($staggerPath)) {
+                                    try {
+                                        $staggerDoc = Read-JsonFile -Path $staggerPath
+                                        $rawLast = Get-OrchestraProperty $staggerDoc 'last_launch_ticks' $null
+                                        $parsedTicks = 0L
+                                        if ($null -ne $rawLast -and [long]::TryParse([string]$rawLast, [ref]$parsedTicks) -and $parsedTicks -gt 0L) {
+                                            $lastLaunchTicks = $parsedTicks
+                                        }
+                                    }
+                                    catch {}
+                                }
+                                $staggerTicks = [long]$effectiveStaggerMs * 10000L
+                                $reservedTicks = [Math]::Max($nowTicks, ($lastLaunchTicks + $staggerTicks))
+                                $delayMs = [int][Math]::Max(0, [Math]::Ceiling(($reservedTicks - $nowTicks) / 10000.0))
+                                Write-JsonAtomic -Path $staggerPath -Object ([ordered]@{
+                                    last_launch_ticks = [long]$reservedTicks
+                                })
+                            }
+                            else {
+                                Write-JsonAtomic -Path $staggerPath -Object ([ordered]@{
+                                    last_launch_ticks = [long]$nowTicks
+                                })
+                            }
+                        }
+
                         return [ordered]@{
+                            acquired = $true
+                            effective_limit = [int]$effectiveLimit
                             lease_path = $leasePath
                             pool = $Pool
                             slot = [int]$chosenSlot
                             waited_sec = [Math]::Round($slotWatch.Elapsed.TotalSeconds, 3)
+                            stagger_ms = [int]$delayMs
                         }
                     }
                 }
-                return $null
+                return [ordered]@{
+                    acquired = $false
+                    effective_limit = [int]$effectiveLimit
+                }
             }
-            if ($null -ne $acquired) {
-                return $acquired
+            $lastEffectiveLimit = [int]$attemptRes.effective_limit
+            if ([bool]$attemptRes.acquired) {
+                $delayToSleep = [int]$attemptRes.stagger_ms
+                if ($delayToSleep -gt 0) {
+                    Start-Sleep -Milliseconds $delayToSleep
+                }
+                return [ordered]@{
+                    lease_path = $attemptRes.lease_path
+                    pool = $attemptRes.pool
+                    slot = [int]$attemptRes.slot
+                    waited_sec = [double]$attemptRes.waited_sec
+                    stagger_ms = $delayToSleep
+                }
             }
             if ($NoWait -or $WaitSec -le 0 -or $slotWatch.Elapsed.TotalSeconds -ge $WaitSec) {
-                throw "ORCHESTRA_LOCK_TIMEOUT: Pool $Pool is at capacity ($Limit/$Limit)."
+                throw "ORCHESTRA_LOCK_TIMEOUT: Pool $Pool is at capacity ($lastEffectiveLimit/$lastEffectiveLimit)."
             }
             if (-not $notifiedQueued) {
                 $notifiedQueued = $true

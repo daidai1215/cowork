@@ -115,6 +115,7 @@ $poolName = $null
 $poolLimits = $null
 $slotLease = $null
 $slotWaitedSec = 0.0
+$slotStaggerMs = 0
 $contextFilesList = New-Object 'System.Collections.Generic.List[string]'
 $startedUtc = (Get-OrchestraNow).ToString('o')
 $rotationEnabled = $false
@@ -510,6 +511,12 @@ try {
 
     $poolName = Get-OrchestraPoolName -Model $modelObject -Channel $channel
     $poolLimits = Get-OrchestraPoolLimits -Policy $policy
+    $rawCooldownSec = Get-OrchestraProperty $policy 'codex_rotation_cooldown_sec' $null
+    $cooldownSec = if ($null -ne $rawCooldownSec) { [int]$rawCooldownSec } else { 15 }
+    if ($cooldownSec -lt 0) { $cooldownSec = 15 }
+    $rawStaggerMs = Get-OrchestraProperty $policy 'launch_stagger_ms' $null
+    $staggerMs = if ($null -ne $rawStaggerMs) { [int]$rawStaggerMs } else { 200 }
+    if ($staggerMs -lt 0) { $staggerMs = 0 }
 
     if ($DryRun) {
         $dryData = @{
@@ -664,6 +671,9 @@ try {
             if ($channel -eq 'codex') {
                 $type = [string](Get-OrchestraProperty $eventObject 'type')
                 if ($type -eq 'thread.started') {
+                    if ($null -ne $paths -and -not $adHoc) {
+                        try { Clear-OrchestraCodexRotationCooldown -Paths $paths } catch {}
+                    }
                     $session = [string](Get-OrchestraProperty $eventObject 'thread_id')
                     if (-not [string]::IsNullOrWhiteSpace($session)) {
                         $capture.session_id = $session
@@ -797,7 +807,7 @@ try {
             try {
                 $slotLease = Acquire-OrchestraPoolSlot -Paths $paths -Pool $poolName `
                     -Limit $poolLimit -InvocationId $invocationId -ModelId $modelId `
-                    -Channel $channel -WaitSec $SlotWaitSec -NoWait:$NoSlotWait `
+                    -Channel $channel -WaitSec $SlotWaitSec -StaggerMs $staggerMs -NoWait:$NoSlotWait `
                     -OnQueued {
                         $null = & $writeStatus 'queued_slot' 'slot.wait' ("Waiting for free $poolName slot")
                     }
@@ -810,6 +820,10 @@ try {
                 else {
                     [Math]::Round($slotAcquireWatch.Elapsed.TotalSeconds, 3)
                 }
+                $slotStaggerMs = if ($null -ne $slotLease) {
+                    [int]$slotLease.stagger_ms
+                }
+                else { 0 }
             }
         }
 
@@ -971,6 +985,12 @@ try {
             $retryable = $rotationEnabled -and $attempt -le $maxRetries -and
                 ($capture.quota -or $AttemptSwitched -or $capture.auth_interrupted)
             if ($retryable) {
+                if ($channel -eq 'codex' -and $null -ne $paths -and -not $adHoc) {
+                    try {
+                        Set-OrchestraCodexRotationCooldown -Paths $paths -CooldownSec $cooldownSec -Reason 'cockpit_rotation_or_429'
+                    }
+                    catch {}
+                }
                 if ($rotationWaitMs -gt 0) {
                     Start-Sleep -Milliseconds $rotationWaitMs
                 }
@@ -998,6 +1018,12 @@ try {
 
         # Only the terminal quota result may affect model availability.
         if ($exitCode -eq 4 -and $capture.quota -and -not $adHoc) {
+            if ($channel -eq 'codex' -and $null -ne $paths) {
+                try {
+                    Set-OrchestraCodexRotationCooldown -Paths $paths -CooldownSec $cooldownSec -Reason 'cockpit_rotation_or_429'
+                }
+                catch {}
+            }
             $exhaustedMinutes = 0.0
             try {
                 $exhaustedMinutes = [double](Get-OrchestraProperty $invoke 'exhausted_minutes' 0)
@@ -1203,6 +1229,7 @@ $finalResult = @{
     context_files_count = [int]$contextFilesList.Count
     pool = $poolName
     slot_wait_sec = [double]$slotWaitedSec
+    stagger_ms = [int]$slotStaggerMs
     usage = $usageSummary
 }
 foreach ($key in $dryData.Keys) { $finalResult[$key] = $dryData[$key] }

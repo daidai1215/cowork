@@ -1,5 +1,12 @@
 # Cowork changelog
 
+## 2026-11-18T12:55:00.0000000Z - Pool concurrency upgrade (`7 / 4 / 3`), AIMD Codex rotation cooldown, and 200ms launch stagger
+- registry_rev: 9 -> 10
+- updated `policy.pool_concurrency_limits` to `{ "agy_google": 7, "codex_openai": 4, "agy_anthropic": 3 }`
+- added `policy.launch_stagger_ms=200` and `policy.codex_rotation_cooldown_sec=15`
+- updated `route.ps1` fallback limits (`7/4/3`), AIMD `rotation_cooldown` / `configured_limit` propagation, and `codex_pool_saturated` hint (`<=4 slots`, AIMD `1` during rotation)
+- backup: registry/history/models-20261118-205200-9-pre10.json
+
 ## 2026-11-18T11:25:00.0000000Z - Multi-pool concurrency limits, load-aware routing (`-BusyAgents`, `-PreferIdle`, `parallel_lanes`), and SDM/TDM slot leasing
 - registry_rev: 8 -> 9
 - added `policy.pool_concurrency_limits` (`codex_openai=2`, `agy_anthropic=2`, `agy_google=6`)
