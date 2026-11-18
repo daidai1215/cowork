@@ -1,0 +1,1299 @@
+{
+    "schema_version":  1,
+    "cap_dimensions":  [
+                           "code_rigor",
+                           "backend",
+                           "math",
+                           "image_gen",
+                           "frontend_aesthetic",
+                           "prose",
+                           "world_knowledge",
+                           "long_context",
+                           "agentic_coding",
+                           "office_docs"
+                       ],
+    "tags":  {
+                 "frontend":  {
+                                  "caps":  [
+                                               "frontend_aesthetic",
+                                               "agentic_coding"
+                                           ],
+                                  "review_caps":  [
+                                                      "frontend_aesthetic"
+                                                  ]
+                              },
+                 "ui":  {
+                            "caps":  [
+                                         "frontend_aesthetic"
+                                     ],
+                            "review_caps":  [
+                                                "frontend_aesthetic"
+                                            ]
+                        },
+                 "landing_page":  {
+                                      "caps":  [
+                                                   "frontend_aesthetic",
+                                                   "prose"
+                                               ],
+                                      "review_caps":  [
+                                                          "frontend_aesthetic"
+                                                      ]
+                                  },
+                 "backend":  {
+                                 "caps":  [
+                                              "backend",
+                                              "code_rigor"
+                                          ],
+                                 "review_caps":  [
+                                                     "code_rigor",
+                                                     "long_context"
+                                                 ],
+                                 "min_cap":  9
+                             },
+                 "api":  {
+                             "caps":  [
+                                          "backend",
+                                          "code_rigor"
+                                      ],
+                             "review_caps":  [
+                                                 "code_rigor"
+                                             ],
+                             "min_cap":  9
+                         },
+                 "concurrency":  {
+                                     "caps":  [
+                                                  "code_rigor",
+                                                  "backend"
+                                              ],
+                                     "review_caps":  [
+                                                         "code_rigor"
+                                                     ],
+                                     "min_cap":  9
+                                 },
+                 "bugfix":  {
+                                "caps":  [
+                                             "code_rigor",
+                                             "agentic_coding"
+                                         ],
+                                "review_caps":  [
+                                                    "code_rigor"
+                                                ]
+                            },
+                 "refactor":  {
+                                  "caps":  [
+                                               "agentic_coding",
+                                               "long_context"
+                                           ],
+                                  "review_caps":  [
+                                                      "code_rigor"
+                                                  ]
+                              },
+                 "math":  {
+                              "caps":  [
+                                           "math"
+                                       ],
+                              "review_caps":  [
+                                                  "math"
+                                              ],
+                              "min_cap":  9
+                          },
+                 "algorithm":  {
+                                   "caps":  [
+                                                "math",
+                                                "code_rigor"
+                                            ],
+                                   "review_caps":  [
+                                                       "code_rigor"
+                                                   ],
+                                   "min_cap":  9
+                               },
+                 "prose":  {
+                               "caps":  [
+                                            "prose"
+                                        ],
+                               "review_caps":  [
+                                                   "world_knowledge"
+                                               ]
+                           },
+                 "essay":  {
+                               "caps":  [
+                                            "prose",
+                                            "world_knowledge"
+                                        ],
+                               "review_caps":  [
+                                                   "world_knowledge"
+                                               ]
+                           },
+                 "paper":  {
+                               "caps":  [
+                                            "prose",
+                                            "world_knowledge"
+                                        ],
+                               "review_caps":  [
+                                                   "code_rigor",
+                                                   "world_knowledge"
+                                               ]
+                           },
+                 "copywriting":  {
+                                     "caps":  [
+                                                  "prose"
+                                              ],
+                                     "review_caps":  [
+                                                         "frontend_aesthetic"
+                                                     ]
+                                 },
+                 "research":  {
+                                  "caps":  [
+                                               "world_knowledge",
+                                               "long_context"
+                                           ],
+                                  "review_caps":  [
+                                                      "code_rigor"
+                                                  ]
+                              },
+                 "image_gen":  {
+                                   "caps":  [
+                                                "image_gen"
+                                            ],
+                                   "review_caps":  [
+                                                       "frontend_aesthetic"
+                                                   ]
+                               },
+                 "office":  {
+                                "caps":  [
+                                             "office_docs"
+                                         ],
+                                "review_caps":  [
+                                                    "frontend_aesthetic",
+                                                    "prose"
+                                                ]
+                            },
+                 "ppt":  {
+                             "caps":  [
+                                          "office_docs"
+                                      ],
+                             "review_caps":  [
+                                                 "frontend_aesthetic"
+                                             ]
+                         },
+                 "long_context":  {
+                                      "caps":  [
+                                                   "long_context"
+                                               ],
+                                      "review_caps":  [
+                                                          "code_rigor"
+                                                      ]
+                                  },
+                 "bulk":  {
+                              "caps":  [
+                                           "agentic_coding",
+                                           "long_context"
+                                       ],
+                              "review_caps":  [
+                                                  "code_rigor"
+                                              ]
+                          },
+                 "boilerplate":  {
+                                     "caps":  [
+                                                  "agentic_coding"
+                                              ],
+                                     "review_caps":  [
+                                                         "code_rigor"
+                                                     ]
+                                 },
+                 "scan":  {
+                              "caps":  [
+                                           "long_context",
+                                           "agentic_coding"
+                                       ],
+                              "review_caps":  [
+                                                  "world_knowledge"
+                                              ]
+                          },
+                 "test_gen":  {
+                                  "caps":  [
+                                               "agentic_coding",
+                                               "code_rigor"
+                                           ],
+                                  "review_caps":  [
+                                                      "code_rigor"
+                                                  ]
+                              },
+                 "architecture":  {
+                                      "caps":  [
+                                                   "code_rigor",
+                                                   "backend",
+                                                   "long_context"
+                                               ],
+                                      "review_caps":  [
+                                                          "code_rigor",
+                                                          "long_context"
+                                                      ],
+                                      "min_cap":  8.5
+                                  }
+             },
+    "hard_rules":  [
+                       {
+                           "id":  "image-gen-tool-only",
+                           "when_tags_any":  [
+                                                 "image_gen"
+                                             ],
+                           "primary_requires_tool":  "image_gen",
+                           "locked":  true,
+                           "note":  "生图只交给具备 image_gen 工具的模型（当前仅 Codex 通道的 GPT-6.2 Astra）"
+                       },
+                       {
+                           "id":  "frontend-aesthetic-gate",
+                           "when_tags_any":  [
+                                                 "frontend",
+                                                 "ui",
+                                                 "landing_page"
+                                             ],
+                           "pattern":  "aesthetic_gate",
+                           "reviewer":  "best-aesthetic",
+                           "exclude_reviewer_from_primary":  true,
+                           "locked":  true,
+                           "note":  "Opus 只审截图/diff 与 design tokens，不写长代码；Opus 不可用时由 Gemini 4 Carbon 按设计检查清单审",
+                           "reviewer_fallback":  "gemini-4-carbon"
+                       },
+                       {
+                           "id":  "rigor-review",
+                           "when_tags_any":  [
+                                                 "backend",
+                                                 "api",
+                                                 "concurrency",
+                                                 "math",
+                                                 "algorithm"
+                                             ],
+                           "reviewer":  "best-rigor",
+                           "locked":  false,
+                           "note":  "数学/后端正确性审查交给最严谨的模型；若它本身就是 primary，则改由次优且不同厂商的模型审查"
+                       },
+                       {
+                           "id":  "final-prose-polish",
+                           "when_tags_any":  [
+                                                 "prose",
+                                                 "essay",
+                                                 "paper",
+                                                 "copywriting",
+                                                 "landing_page"
+                                             ],
+                           "polisher":  "best-prose",
+                           "locked":  true,
+                           "note":  "最终文字润色交给文笔最好的模型（Gemini 4 Carbon）；拒绝防御性写作"
+                       }
+                   ],
+    "modes":  {
+                  "peak":  {
+                               "lambda_q":  0.0,
+                               "lambda_s":  0.0
+                           },
+                  "balanced":  {
+                                   "lambda_q":  0.8,
+                                   "lambda_s":  0.5
+                               },
+                  "quality":  {
+                                  "lambda_q":  0.2,
+                                  "lambda_s":  0.1
+                              },
+                  "economy":  {
+                                  "lambda_q":  1.5,
+                                  "lambda_s":  0.5
+                              },
+                  "fast":  {
+                               "lambda_q":  0.5,
+                               "lambda_s":  1.5
+                           },
+                  "fast_4h":  {
+                                  "lambda_q":  0,
+                                  "lambda_s":  0.2
+                              },
+                  "orchestrator_fast":  {
+                                            "lambda_q":  0.0,
+                                            "lambda_s":  0.2
+                                        },
+                  "carbon_peak":  {
+                                      "lambda_q":  0.0,
+                                      "lambda_s":  0.0
+                                  },
+                  "hydrogen_max":  {
+                                       "lambda_q":  0.0,
+                                       "lambda_s":  0.25
+                                   }
+              },
+    "policy":  {
+                   "scan_interval_hours":  24,
+                   "scan_failure_backoff_hours":  1,
+                   "missing_scans_before_unavailable":  2,
+                   "refresh_days":  30,
+                   "candidate_penalty":  1.0,
+                   "low_quota_penalty":  1.5,
+                   "exhausted_hours":  5,
+                   "promote_after_ok":  3,
+                   "promote_min_distinct_tags":  2,
+                   "promote_max_bad":  1,
+                   "promote_min_confidence":  0.6,
+                   "reject_after_consecutive_fail":  2,
+                   "reject_below_confidence":  0.4,
+                   "auto_apply_max_delta":  2,
+                   "redo_window_days":  30,
+                   "redo_min_samples":  3,
+                   "redo_penalty_scale":  3.0,
+                   "escalate_after_failures":  2,
+                   "default_mode":  "peak",
+                   "default_effort":  "high",
+                   "peak_effort_tags":  [
+                                            "math"
+                                        ],
+                   "dual_draft_tags":  [
+                                           "algorithm",
+                                           "concurrency",
+                                           "bugfix",
+                                           "math"
+                                       ],
+                   "usage_compact_bytes":  2097152,
+                   "usage_retain_days":  90,
+                   "history_keep_count":  30,
+                   "telemetry_min_samples":  5,
+                   "telemetry_bad_rate_threshold":  0.4,
+                   "fast_workhorse_map":  {
+                                              "from_model":  "gemini-4-carbon",
+                                              "to_model":  "gemini-4-hydrogen",
+                                              "retain_primary_tags":  [
+                                                                          "paper",
+                                                                          "essay",
+                                                                          "copywriting",
+                                                                          "architecture"
+                                                                      ],
+                                              "retain_reviewer_tags":  [
+                                                                           "math",
+                                                                           "algorithm",
+                                                                           "architecture"
+                                                                       ],
+                                              "retain_polisher_tags":  [
+                                                                           "paper",
+                                                                           "essay",
+                                                                           "copywriting"
+                                                                       ]
+                                          },
+                   "host_mode_map":  {
+                                         "orchestrator":  "orchestrator_fast",
+                                         "carbon":  "carbon_peak",
+                                         "hydrogen":  "hydrogen_max"
+                                     },
+                   "mechanical_fast_tags":  [
+                                                "bulk",
+                                                "boilerplate",
+                                                "scan",
+                                                "test_gen"
+                                            ],
+                   "ultra_fast_tags":  [
+                                           "scan"
+                                       ],
+                   "carbon_peak_offload_tags":  [
+                                                    "bulk",
+                                                    "boilerplate",
+                                                    "scan",
+                                                    "test_gen"
+                                                ],
+                   "hydrogen_max_policy":  {
+                                               "from_model":  "gemini-4-carbon",
+                                               "to_model":  "gemini-4-hydrogen",
+                                               "final_review_triggers":  [
+                                                                             "paper",
+                                                                             "essay",
+                                                                             "copywriting",
+                                                                             "architecture"
+                                                                         ]
+                                           },
+                   "pool_concurrency_limits":  {
+                                                   "agy_google":  7,
+                                                   "codex_openai":  4,
+                                                   "agy_anthropic":  3
+                                               },
+                   "launch_stagger_ms":  200,
+                   "codex_rotation_cooldown_sec":  15,
+                   "plan_external_min_unread_files":  5
+               },
+    "models":  [
+                   {
+                       "id":  "gpt-6-astra",
+                       "display_name":  "GPT-6 Astra",
+                       "vendor":  "openai",
+                       "family":  "openai-gpt",
+                       "generation":  "6",
+                       "tier":  "flagship",
+                       "channel":  "codex",
+                       "invoke":  {
+                                      "model_flag":  "gpt-6-astra",
+                                      "default_effort":  "high",
+                                      "peak_effort":  "xhigh",
+                                      "efforts":  [
+                                                      "low",
+                                                      "medium",
+                                                      "high",
+                                                      "xhigh"
+                                                  ],
+                                      "account_rotation":  true,
+                                      "rotation_max_retries":  2,
+                                      "rotation_wait_sec":  10,
+                                      "exhausted_minutes":  30,
+                                      "connect_timeout_sec":  25,
+                                      "reconnect_abort_count":  2
+                                  },
+                       "tools":  [
+                                     "image_gen",
+                                     "office_plugins",
+                                     "latex",
+                                     "browser",
+                                     "computer_use"
+                                 ],
+                       "quota_rank":  2,
+                       "speed_rank":  1,
+                       "ranks_locked":  true,
+                       "escalation_only":  false,
+                       "escalate_to":  null,
+                       "fallback":  [
+                                        "gpt-6.2-astra",
+                                        "gemini-4-carbon"
+                                    ],
+                       "caps":  {
+                                    "code_rigor":  {
+                                                       "score":  10,
+                                                       "approved_score":  10,
+                                                       "source":  "user",
+                                                       "locked":  true,
+                                                       "confidence":  0.8
+                                                   },
+                                    "backend":  {
+                                                    "score":  10,
+                                                    "approved_score":  10,
+                                                    "source":  "user",
+                                                    "locked":  true,
+                                                    "confidence":  0.8
+                                                },
+                                    "math":  {
+                                                 "score":  10,
+                                                 "approved_score":  10,
+                                                 "source":  "user",
+                                                 "locked":  true,
+                                                 "confidence":  0.8
+                                             },
+                                    "image_gen":  {
+                                                      "score":  10,
+                                                      "approved_score":  10,
+                                                      "source":  "user",
+                                                      "locked":  true,
+                                                      "confidence":  0.8
+                                                  },
+                                    "frontend_aesthetic":  {
+                                                               "score":  7,
+                                                               "approved_score":  7,
+                                                               "source":  "public",
+                                                               "locked":  false,
+                                                               "confidence":  0.6
+                                                           },
+                                    "prose":  {
+                                                  "score":  6,
+                                                  "approved_score":  6,
+                                                  "source":  "public",
+                                                  "locked":  false,
+                                                  "confidence":  0.5
+                                              },
+                                    "world_knowledge":  {
+                                                            "score":  9,
+                                                            "approved_score":  9,
+                                                            "source":  "public",
+                                                            "locked":  false,
+                                                            "confidence":  0.7
+                                                        },
+                                    "long_context":  {
+                                                         "score":  8,
+                                                         "approved_score":  8,
+                                                         "source":  "public",
+                                                         "locked":  false,
+                                                         "confidence":  0.6
+                                                     },
+                                    "agentic_coding":  {
+                                                           "score":  9.5,
+                                                           "approved_score":  9.5,
+                                                           "source":  "public",
+                                                           "locked":  false,
+                                                           "confidence":  0.7
+                                                       },
+                                    "office_docs":  {
+                                                        "score":  9,
+                                                        "approved_score":  9,
+                                                        "source":  "public",
+                                                        "locked":  false,
+                                                        "confidence":  0.7
+                                                    }
+                                },
+                       "strengths":  [
+                                         "OpenAI 能力天花板：代码严谨性、后端工程、极难多步数学与形式推导",
+                                         "生图最强（Codex 内置 image_gen，三家中唯一）",
+                                         "Codex 专属生态：Office 原生文档 / PPT / LaTeX / 浏览器与桌面操作",
+                                         "结构化输出与契约遵循极稳"
+                                     ],
+                       "weaknesses":  [
+                                          "单账号额度较少，依赖 Cockpit 自动切换账号，切换瞬间可能打断在途流或使旧会话加密推理状态失效",
+                                          "三家中最慢",
+                                          "防御性写作倾向（叠甲、免责前提、‘并非 X 而是 Y’套话），不宜直接定稿长文",
+                                          "前端视觉品味不如 Opus 5.5"
+                                      ],
+                       "last_researched":  "2026-11-10",
+                       "evidence":  [
+                                        {
+                                            "url":  "user",
+                                            "claim":  "用户指令（2026-11-10）：当前 Codex 端只用 GPT-6 Astra (high)；单账号额度较少，由 Cockpit 自动切换账号；生图、代码严谨性、后端、数学最好；速度最慢",
+                                            "date":  "2026-11-10"
+                                        }
+                                    ],
+                       "status":  "retired"
+                   },
+                   {
+                       "id":  "claude-opus-5-5",
+                       "display_name":  "Claude Opus 5.5",
+                       "vendor":  "anthropic",
+                       "family":  "anthropic-claude-opus",
+                       "generation":  "5.5",
+                       "tier":  "flagship",
+                       "channel":  "agy",
+                       "invoke":  {
+                                      "model_flag":  "claude-opus-5-5-{effort}",
+                                      "efforts":  [
+                                                      "low",
+                                                      "medium",
+                                                      "high"
+                                                  ],
+                                      "default_effort":  "high"
+                                  },
+                       "tools":  [
+                                     "web_search",
+                                     "browser"
+                                 ],
+                       "quota_rank":  1,
+                       "speed_rank":  2,
+                       "ranks_locked":  true,
+                       "escalation_only":  false,
+                       "escalate_to":  null,
+                       "caps":  {
+                                    "code_rigor":  {
+                                                       "score":  8.5,
+                                                       "approved_score":  8.5,
+                                                       "source":  "public",
+                                                       "locked":  false,
+                                                       "confidence":  0.7
+                                                   },
+                                    "backend":  {
+                                                    "score":  8,
+                                                    "approved_score":  8,
+                                                    "source":  "public",
+                                                    "locked":  false,
+                                                    "confidence":  0.6
+                                                },
+                                    "math":  {
+                                                 "score":  8,
+                                                 "approved_score":  8,
+                                                 "source":  "public",
+                                                 "locked":  false,
+                                                 "confidence":  0.6
+                                             },
+                                    "image_gen":  {
+                                                      "score":  0,
+                                                      "approved_score":  0,
+                                                      "source":  "public",
+                                                      "locked":  false,
+                                                      "confidence":  0.8
+                                                  },
+                                    "frontend_aesthetic":  {
+                                                               "score":  10,
+                                                               "approved_score":  10,
+                                                               "source":  "user",
+                                                               "locked":  true,
+                                                               "confidence":  0.8
+                                                           },
+                                    "prose":  {
+                                                  "score":  8.5,
+                                                  "approved_score":  8.5,
+                                                  "source":  "public",
+                                                  "locked":  false,
+                                                  "confidence":  0.6
+                                              },
+                                    "world_knowledge":  {
+                                                            "score":  8,
+                                                            "approved_score":  8,
+                                                            "source":  "public",
+                                                            "locked":  false,
+                                                            "confidence":  0.6
+                                                        },
+                                    "long_context":  {
+                                                         "score":  8,
+                                                         "approved_score":  8,
+                                                         "source":  "public",
+                                                         "locked":  false,
+                                                         "confidence":  0.6
+                                                     },
+                                    "agentic_coding":  {
+                                                           "score":  9.5,
+                                                           "approved_score":  9.5,
+                                                           "source":  "public",
+                                                           "locked":  false,
+                                                           "confidence":  0.8
+                                                       },
+                                    "office_docs":  {
+                                                        "score":  5,
+                                                        "approved_score":  5,
+                                                        "source":  "public",
+                                                        "locked":  false,
+                                                        "confidence":  0.4
+                                                    }
+                                },
+                       "strengths":  [
+                                         "审美最好，尤其前端 UI / 落地页 / 视觉层级与细节质感",
+                                         "AA Coding Agent Index 全球第 1（62 分），多文件自主重构与架构品味极佳",
+                                         "指令理解细腻"
+                                     ],
+                       "weaknesses":  [
+                                          "单池额度最稀缺，必须惜用（只做决策拍板、审美把关与精简终裁，不铺写大段初稿）",
+                                          "速度居中（慢于 Gemini 4 Carbon / Hydrogen，快于 GPT-6.2 Astra）",
+                                          "不能原生生图"
+                                      ],
+                       "last_researched":  "2026-11-10",
+                       "evidence":  [
+                                        {
+                                            "url":  "user",
+                                            "claim":  "用户指令（2026-11-10）：当前使用 Claude Opus 5.5 (high)；审美最好，特别是前端审美；额度最少；速度居中",
+                                            "date":  "2026-11-10"
+                                        }
+                                    ],
+                       "status":  "active",
+                       "primary_disabled":  true,
+                       "fallback":  [
+                                        "gemini-4-carbon",
+                                        "gemini-4-hydrogen",
+                                        "gpt-6.2-astra"
+                                    ]
+                   },
+                   {
+                       "id":  "gemini-4-carbon",
+                       "display_name":  "Gemini 4 Carbon",
+                       "vendor":  "google",
+                       "family":  "google-gemini",
+                       "generation":  "4",
+                       "tier":  "flagship",
+                       "channel":  "agy",
+                       "invoke":  {
+                                      "model_flag":  "gemini-4-carbon-{effort}",
+                                      "efforts":  [
+                                                      "low",
+                                                      "medium",
+                                                      "high"
+                                                  ],
+                                      "default_effort":  "high"
+                                  },
+                       "tools":  [
+                                     "web_search",
+                                     "browser",
+                                     "long_context_1m"
+                                 ],
+                       "quota_rank":  3,
+                       "speed_rank":  2,
+                       "ranks_locked":  true,
+                       "escalation_only":  false,
+                       "escalate_to":  null,
+                       "caps":  {
+                                    "code_rigor":  {
+                                                       "score":  8.5,
+                                                       "approved_score":  8.5,
+                                                       "source":  "public",
+                                                       "locked":  false,
+                                                       "confidence":  0.7,
+                                                       "evidence":  [
+                                                                        {
+                                                                            "claim":  "CWE-bench 漏洞修复 71.0%、SEC-bench Pro 88.2%、SWE-sweep 9.6%（较 Argon 翻倍以上），AA Coding Agent Index 59 分（全球第 2）。",
+                                                                            "date":  "2026-10-28",
+                                                                            "url":  "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-carbon/"
+                                                                        }
+                                                                    ]
+                                                   },
+                                    "backend":  {
+                                                    "score":  8.5,
+                                                    "approved_score":  8.5,
+                                                    "source":  "public",
+                                                    "locked":  false,
+                                                    "confidence":  0.7,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "claim":  "专为长周期工程与网络安全设计，Terminal-Bench 4.0 达 65.2%（作弊率 0.0%），CWE-bench 达 71.0%。",
+                                                                         "date":  "2026-10-28",
+                                                                         "url":  "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-carbon/"
+                                                                     }
+                                                                 ]
+                                                },
+                                    "math":  {
+                                                 "score":  8.5,
+                                                 "approved_score":  8.5,
+                                                 "source":  "public",
+                                                 "locked":  false,
+                                                 "confidence":  0.6,
+                                                 "evidence":  [
+                                                                  {
+                                                                      "claim":  "AA Intelligence Index v5.0 综合第 1（59 分），HLE-Diamond 69.1% 第 1。",
+                                                                      "date":  "2026-10-28",
+                                                                      "url":  "https://artificialanalysis.ai/articles/gemini-4-carbon-new-number-1"
+                                                                  }
+                                                              ]
+                                             },
+                                    "image_gen":  {
+                                                      "score":  0,
+                                                      "approved_score":  0,
+                                                      "source":  "public",
+                                                      "locked":  false,
+                                                      "confidence":  0.8,
+                                                      "evidence":  [
+                                                                       {
+                                                                           "claim":  "不支持原生图像生成，生图统一走 Codex 通道的 GPT-6 Astra。",
+                                                                           "date":  "2026-10-28",
+                                                                           "url":  "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-carbon/"
+                                                                       }
+                                                                   ]
+                                                  },
+                                    "frontend_aesthetic":  {
+                                                               "score":  8,
+                                                               "approved_score":  8,
+                                                               "source":  "public",
+                                                               "locked":  false,
+                                                               "confidence":  0.7,
+                                                               "evidence":  [
+                                                                                {
+                                                                                    "claim":  "LMArena WebDev Arena 1768 Elo（较 Argon +89 Elo，全球第 4），适合快速起草前端后交 Opus 审美把关。",
+                                                                                    "date":  "2026-10-28",
+                                                                                    "url":  "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-carbon/"
+                                                                                }
+                                                                            ]
+                                                           },
+                                    "prose":  {
+                                                  "score":  10,
+                                                  "approved_score":  10,
+                                                  "source":  "user",
+                                                  "locked":  true,
+                                                  "confidence":  0.8,
+                                                  "evidence":  [
+                                                                   {
+                                                                       "claim":  "用户判断：Gemini 文笔最好；LMArena Text Arena 盲测总榜第 1（约 1528 Elo）。",
+                                                                       "date":  "2026-11-10",
+                                                                       "url":  "user"
+                                                                   }
+                                                               ]
+                                              },
+                                    "world_knowledge":  {
+                                                            "score":  10,
+                                                            "approved_score":  10,
+                                                            "source":  "user",
+                                                            "locked":  true,
+                                                            "confidence":  0.8,
+                                                            "evidence":  [
+                                                                             {
+                                                                                 "claim":  "用户判断：Gemini 世界知识很好；AA-Omniscience（54 分）与 HLE-Diamond（69.1%）双第 1，但 AA 幻觉率 11%，涉及事实须走 Truth Gate。",
+                                                                                 "date":  "2026-11-10",
+                                                                                 "url":  "https://artificialanalysis.ai/articles/gemini-4-carbon-new-number-1"
+                                                                             }
+                                                                         ]
+                                                        },
+                                    "long_context":  {
+                                                         "score":  10,
+                                                         "approved_score":  10,
+                                                         "source":  "public",
+                                                         "locked":  false,
+                                                         "confidence":  0.8,
+                                                         "evidence":  [
+                                                                          {
+                                                                              "claim":  "支持 100 万（1M）token 上下文窗口，GraphWalks BFS（256K–1M）取得 96.2% F1。",
+                                                                              "date":  "2026-10-28",
+                                                                              "url":  "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-carbon/"
+                                                                          }
+                                                                      ]
+                                                     },
+                                    "agentic_coding":  {
+                                                           "score":  9,
+                                                           "approved_score":  9,
+                                                           "source":  "public",
+                                                           "locked":  false,
+                                                           "confidence":  0.8,
+                                                           "evidence":  [
+                                                                            {
+                                                                                "claim":  "AA Coding Agent Index 59 分（全球第 2，仅次于 Opus 5.5 的 62 分），Terminal-Bench 4.0 达 65.2%。",
+                                                                                "date":  "2026-10-28",
+                                                                                "url":  "https://artificialanalysis.ai/articles/gemini-4-carbon-new-number-1"
+                                                                            }
+                                                                        ]
+                                                       },
+                                    "office_docs":  {
+                                                        "score":  5,
+                                                        "approved_score":  5,
+                                                        "source":  "public",
+                                                        "locked":  false,
+                                                        "confidence":  0.6,
+                                                        "evidence":  [
+                                                                         {
+                                                                             "claim":  "无 Codex 专属的本地 Office/PPT 原生生成插件工具链。",
+                                                                             "date":  "2026-10-28",
+                                                                             "url":  "user"
+                                                                         }
+                                                                     ]
+                                                    }
+                                },
+                       "strengths":  [
+                                         "文笔最好、自然去 AI 腔，LMArena 文本总榜第 1",
+                                         "世界知识与联网检索综述最强（AA Intelligence Index v5 60 分、Omniscience 第 1、HLE 69.1%）",
+                                         "1M 超长上下文（整仓深读、长文档图推理极强）",
+                                         "快速模式下专守论文/长文/深度定稿与数学/算法复核等少数高要求关口，日常负载可无缝下放 4H Extra"
+                                     ],
+                       "weaknesses":  [
+                                          "AA 实测幻觉率约 11%，涉及文献、具体数值与 API 事实时必须经过 Truth Gate 双查",
+                                          "极限形式数学与底层后端严谨性略逊于 GPT-6.2 Astra；响应慢于 4H Extra",
+                                          "前端视觉品味虽强（WebDev 第 4），仍次于 Opus 5.5",
+                                          "不支持原生图像生成，无 Codex 专属本地 Office 插件链"
+                                      ],
+                       "last_researched":  "2026-11-10",
+                       "evidence":  [
+                                        {
+                                            "url":  "user",
+                                            "claim":  "用户指令（2026-11-10）：Gemini 4 Carbon 已正式启用，当前固定只用 gpt-6-astra high、claude-opus-5-5 high、gemini-4-carbon high",
+                                            "date":  "2026-11-10"
+                                        },
+                                        {
+                                            "url":  "https://artificialanalysis.ai/articles/gemini-4-carbon-new-number-1",
+                                            "claim":  "AA Intelligence Index v5 第 1（59 分），Coding Agent Index 第 2（59 分），Omniscience 第 1（54 分），幻觉率 11%",
+                                            "date":  "2026-10-28"
+                                        }
+                                    ],
+                       "status":  "active",
+                       "primary_disabled":  false,
+                       "fallback":  [
+                                        "gemini-4-hydrogen",
+                                        "gpt-6.2-astra"
+                                    ]
+                   },
+                   {
+                       "id":  "gpt-6.2-astra",
+                       "display_name":  "GPT-6.2 Astra",
+                       "vendor":  "openai",
+                       "family":  "openai-gpt",
+                       "generation":  "6.2",
+                       "tier":  "flagship",
+                       "status":  "active",
+                       "channel":  "codex",
+                       "invoke":  {
+                                      "model_flag":  "gpt-6.2-astra",
+                                      "default_effort":  "high",
+                                      "peak_effort":  "xhigh",
+                                      "efforts":  [
+                                                      "low",
+                                                      "medium",
+                                                      "high",
+                                                      "xhigh"
+                                                  ],
+                                      "account_rotation":  true,
+                                      "rotation_max_retries":  2,
+                                      "rotation_wait_sec":  10,
+                                      "exhausted_minutes":  30,
+                                      "connect_timeout_sec":  25,
+                                      "reconnect_abort_count":  2
+                                  },
+                       "tools":  [
+                                     "image_gen",
+                                     "office_plugins",
+                                     "latex",
+                                     "browser",
+                                     "computer_use"
+                                 ],
+                       "quota_rank":  2,
+                       "speed_rank":  1,
+                       "ranks_locked":  true,
+                       "primary_disabled":  false,
+                       "escalation_only":  false,
+                       "escalate_to":  null,
+                       "fallback":  [
+                                        "gemini-4-carbon",
+                                        "gemini-4-hydrogen"
+                                    ],
+                       "caps":  {
+                                    "code_rigor":  {
+                                                       "score":  10,
+                                                       "approved_score":  10,
+                                                       "source":  "user",
+                                                       "locked":  true,
+                                                       "confidence":  0.85,
+                                                       "evidence":  [
+                                                                        {
+                                                                            "url":  "https://artificialanalysis.ai",
+                                                                            "claim":  "GPT-6 Astra 直接继任旗舰，代码严谨性与核心后端能力居 OpenAI 系榜首；但 AA Coding Agent Index 与 GPT-6 Astra 基本持平。",
+                                                                            "date":  "2026-11-18"
+                                                                        }
+                                                                    ]
+                                                   },
+                                    "backend":  {
+                                                    "score":  10,
+                                                    "approved_score":  10,
+                                                    "source":  "user",
+                                                    "locked":  true,
+                                                    "confidence":  0.85,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "url":  "https://openai.com",
+                                                                         "claim":  "2026-11-17 正式发布；高难度科研与工程工作流 Terminal-Bench-Science 领先，后端工程与不变量控制延续 6 Astra 天花板。",
+                                                                         "date":  "2026-11-18"
+                                                                     }
+                                                                 ]
+                                                },
+                                    "math":  {
+                                                 "score":  10,
+                                                 "approved_score":  10,
+                                                 "source":  "user",
+                                                 "locked":  true,
+                                                 "confidence":  0.9,
+                                                 "evidence":  [
+                                                                  {
+                                                                      "url":  "https://openai.com",
+                                                                      "claim":  "GPQA Diamond（无工具）97%（超越 6 Astra 的 96%），AA Intelligence Index 62 分（全球第 2，较 6 Astra 提升 5 分），CritPt v2 与科研数学领跑。",
+                                                                      "date":  "2026-11-18"
+                                                                  }
+                                                              ]
+                                             },
+                                    "image_gen":  {
+                                                      "score":  10,
+                                                      "approved_score":  10,
+                                                      "source":  "user",
+                                                      "locked":  true,
+                                                      "confidence":  0.85,
+                                                      "evidence":  [
+                                                                       {
+                                                                           "url":  "user",
+                                                                           "claim":  "Codex 通道唯一内置原生 image_gen 工具链。",
+                                                                           "date":  "2026-11-18"
+                                                                       }
+                                                                   ]
+                                                  },
+                                    "frontend_aesthetic":  {
+                                                               "score":  7.5,
+                                                               "approved_score":  7.5,
+                                                               "source":  "public",
+                                                               "locked":  false,
+                                                               "confidence":  0.65,
+                                                               "evidence":  [
+                                                                                {
+                                                                                    "url":  "https://artificialanalysis.ai",
+                                                                                    "claim":  "OpenAI 在 6.2 中加强前端与 3D 渲染表现（AA-3D 领跑），但整体 UI 审美仍次于 Opus 5.5 与 Carbon。",
+                                                                                    "date":  "2026-11-18"
+                                                                                }
+                                                                            ]
+                                                           },
+                                    "prose":  {
+                                                  "score":  7,
+                                                  "approved_score":  7,
+                                                  "source":  "public",
+                                                  "locked":  false,
+                                                  "confidence":  0.65,
+                                                  "evidence":  [
+                                                                   {
+                                                                       "url":  "https://openai.com",
+                                                                       "claim":  "官方针对文风“去 AI 腔”与模板严格遵循优化（优于 6 Astra 的 6.0），但自然文学与长文表达仍以 Gemini 4 Carbon 为最佳。",
+                                                                       "date":  "2026-11-18"
+                                                                   }
+                                                               ]
+                                              },
+                                    "world_knowledge":  {
+                                                            "score":  8.5,
+                                                            "approved_score":  8.5,
+                                                            "source":  "public",
+                                                            "locked":  false,
+                                                            "confidence":  0.8,
+                                                            "evidence":  [
+                                                                             {
+                                                                                 "url":  "https://artificialanalysis.ai",
+                                                                                 "claim":  "科学推理登顶（GPQA 97%），但 AA Omniscience 实测无依据猜测/幻觉率从 50% 升至 59%（最大推理档），事实与文献引用必须严过 Truth Gate。",
+                                                                                 "date":  "2026-11-18"
+                                                                             }
+                                                                         ]
+                                                        },
+                                    "long_context":  {
+                                                         "score":  9,
+                                                         "approved_score":  9,
+                                                         "source":  "public",
+                                                         "locked":  false,
+                                                         "confidence":  0.8,
+                                                         "evidence":  [
+                                                                          {
+                                                                              "url":  "https://artificialanalysis.ai",
+                                                                              "claim":  "扩展至 1M 上下文窗口，缓存输入单价降至 $0.40/M（降幅 60%），适合长程代理与大文档对照分析。",
+                                                                              "date":  "2026-11-18"
+                                                                          }
+                                                                      ]
+                                                     },
+                                    "agentic_coding":  {
+                                                           "score":  9.5,
+                                                           "approved_score":  9.5,
+                                                           "source":  "public",
+                                                           "locked":  false,
+                                                           "confidence":  0.8,
+                                                           "evidence":  [
+                                                                            {
+                                                                                "url":  "https://tbench.ai",
+                                                                                "claim":  "Codex 最高档 Terminal-Bench 4.0 达 62.1%，Terminal-Bench-Science 领先，整体 Coding Agent 指数与 6 Astra 持平。",
+                                                                                "date":  "2026-11-18"
+                                                                            }
+                                                                        ]
+                                                       },
+                                    "office_docs":  {
+                                                        "score":  9.5,
+                                                        "approved_score":  9.5,
+                                                        "source":  "public",
+                                                        "locked":  false,
+                                                        "confidence":  0.75,
+                                                        "evidence":  [
+                                                                         {
+                                                                             "url":  "https://openai.com",
+                                                                             "claim":  "支持 Codex 原生 PPT/Word/Excel/LaTeX 工具链，6.2 版进一步强化长模板与专业文书格式还原。",
+                                                                             "date":  "2026-11-18"
+                                                                         }
+                                                                     ]
+                                                    }
+                                },
+                       "strengths":  [
+                                         "OpenAI 最新旗舰（2026-11-17）：AA Intelligence Index 62 分（全球第 2），GPQA 97%，科研与数学推导再创新高",
+                                         "扩展至 1M 上下文窗口且支持 $0.40/M 缓存定价，后端契约、极端边界与并发严谨性极强",
+                                         "生图最强（Codex 内置 image_gen）与 Office/PPT/LaTeX 生态完备"
+                                     ],
+                       "weaknesses":  [
+                                          "AA Omniscience 事实幻觉率从 50% 升至 59%，涉及文献引用、API 签名与客观数值时绝不可跳过 Truth Gate",
+                                          "AA Coding Agent Index 相比 6 Astra 未拉大代差；前端 UI 审美仍不如 Opus 5.5",
+                                          "单账号额度依赖 Cockpit 自动切号，四家中响应最慢，日常批量分片编码推荐配合 4H Extra"
+                                      ],
+                       "last_researched":  "2026-11-18",
+                       "evidence":  [
+                                        {
+                                            "url":  "user",
+                                            "claim":  "用户指令（2026-11-18）：GPT-6.2 Astra 已更新，全面替换 GPT-6 Astra。",
+                                            "date":  "2026-11-18"
+                                        },
+                                        {
+                                            "url":  "https://artificialanalysis.ai",
+                                            "claim":  "AA Intelligence Index 62 (#2)，GPQA 97%，Terminal-Bench 4.0 62.1%，Omniscience 幻觉率 59%。",
+                                            "date":  "2026-11-18"
+                                        }
+                                    ]
+                   },
+                   {
+                       "id":  "gemini-4-hydrogen",
+                       "display_name":  "Gemini 4 Hydrogen",
+                       "vendor":  "google",
+                       "family":  "google-gemini",
+                       "generation":  "4",
+                       "tier":  "fast",
+                       "status":  "active",
+                       "channel":  "agy",
+                       "invoke":  {
+                                      "model_flag":  "gemini-4-hydrogen-{effort}",
+                                      "default_effort":  "xhigh",
+                                      "peak_effort":  "xhigh",
+                                      "efforts":  [
+                                                      "low",
+                                                      "medium",
+                                                      "high",
+                                                      "xhigh"
+                                                  ]
+                                  },
+                       "tools":  [
+                                     "web_search",
+                                     "browser",
+                                     "long_context_1m"
+                                 ],
+                       "quota_rank":  3,
+                       "speed_rank":  3,
+                       "ranks_locked":  true,
+                       "primary_disabled":  false,
+                       "escalation_only":  false,
+                       "escalate_to":  "gemini-4-carbon",
+                       "fallback":  [
+                                        "gemini-4-carbon",
+                                        "gpt-6.2-astra"
+                                    ],
+                       "caps":  {
+                                    "code_rigor":  {
+                                                       "score":  8,
+                                                       "approved_score":  8,
+                                                       "source":  "public",
+                                                       "locked":  false,
+                                                       "confidence":  0.75,
+                                                       "evidence":  [
+                                                                        {
+                                                                            "url":  "https://blog.google",
+                                                                            "claim":  "2026-11-12 发布，工具调用与 API 幻觉率较 Flash 3.8 显著降低，日常代码严谨度略低于 Carbon（8.5）。",
+                                                                            "date":  "2026-11-18"
+                                                                        }
+                                                                    ]
+                                                   },
+                                    "backend":  {
+                                                    "score":  8,
+                                                    "approved_score":  8,
+                                                    "source":  "public",
+                                                    "locked":  false,
+                                                    "confidence":  0.75,
+                                                    "evidence":  [
+                                                                     {
+                                                                         "url":  "https://blog.google",
+                                                                         "claim":  "Terminal-Bench 4.1 达 57.0%（作弊修正后，超 3.8 Flash 逾三倍），胜任日常后端迭代与验证。",
+                                                                         "date":  "2026-11-18"
+                                                                     }
+                                                                 ]
+                                                },
+                                    "math":  {
+                                                 "score":  8,
+                                                 "approved_score":  8,
+                                                 "source":  "public",
+                                                 "locked":  false,
+                                                 "confidence":  0.75,
+                                                 "evidence":  [
+                                                                  {
+                                                                      "url":  "https://blog.google",
+                                                                      "claim":  "支持 Gemini 4 系列独有的 xhigh（4H Extra）深思档：AA Intelligence Index 从 high 的 51 分提升至 xhigh 的 54 分。",
+                                                                      "date":  "2026-11-18"
+                                                                  }
+                                                              ]
+                                             },
+                                    "image_gen":  {
+                                                      "score":  0,
+                                                      "approved_score":  0,
+                                                      "source":  "public",
+                                                      "locked":  false,
+                                                      "confidence":  0.85,
+                                                      "evidence":  [
+                                                                       {
+                                                                           "url":  "https://blog.google",
+                                                                           "claim":  "不支持原生图像生成，生图统一交 Codex 通道的 GPT-6.2 Astra。",
+                                                                           "date":  "2026-11-18"
+                                                                       }
+                                                                   ]
+                                                  },
+                                    "frontend_aesthetic":  {
+                                                               "score":  7.5,
+                                                               "approved_score":  7.5,
+                                                               "source":  "public",
+                                                               "locked":  false,
+                                                               "confidence":  0.7,
+                                                               "evidence":  [
+                                                                                {
+                                                                                    "url":  "https://blog.google",
+                                                                                    "claim":  "LMArena WebDev 与交互界面快速原型能力突出，配合 Opus 5.5 Aesthetic Gate 即可达到顶级视觉水准。",
+                                                                                    "date":  "2026-11-18"
+                                                                                }
+                                                                            ]
+                                                           },
+                                    "prose":  {
+                                                  "score":  8,
+                                                  "approved_score":  8,
+                                                  "source":  "public",
+                                                  "locked":  false,
+                                                  "confidence":  0.7,
+                                                  "evidence":  [
+                                                                   {
+                                                                       "url":  "https://deepmind.google",
+                                                                       "claim":  "清晰结构化表达优良，侧重快速执行与工程文档；高要求论文/深度文稿与定稿润色仍交 Carbon（10 分）。",
+                                                                       "date":  "2026-11-18"
+                                                                   }
+                                                               ]
+                                              },
+                                    "world_knowledge":  {
+                                                            "score":  8.5,
+                                                            "approved_score":  8.5,
+                                                            "source":  "public",
+                                                            "locked":  false,
+                                                            "confidence":  0.75,
+                                                            "evidence":  [
+                                                                             {
+                                                                                 "url":  "https://blog.google",
+                                                                                 "claim":  "4H Extra（xhigh）AA Intelligence Index 达 54 分（超过 Argon 的 50 分），但极高知识密度仍不及 Carbon（60 分 / HLE #1）。",
+                                                                                 "date":  "2026-11-18"
+                                                                             }
+                                                                         ]
+                                                        },
+                                    "long_context":  {
+                                                         "score":  9.5,
+                                                         "approved_score":  9.5,
+                                                         "source":  "public",
+                                                         "locked":  false,
+                                                         "confidence":  0.8,
+                                                         "evidence":  [
+                                                                          {
+                                                                              "url":  "https://blog.google",
+                                                                              "claim":  "统一 1M token 上下文窗口（$1.50/$7.50），约 2.5 倍吞吐速度极适合全仓预读、高速勘察与批量分片综述。",
+                                                                              "date":  "2026-11-18"
+                                                                          }
+                                                                      ]
+                                                     },
+                                    "agentic_coding":  {
+                                                           "score":  8.5,
+                                                           "approved_score":  8.5,
+                                                           "source":  "public",
+                                                           "locked":  false,
+                                                           "confidence":  0.8,
+                                                           "evidence":  [
+                                                                            {
+                                                                                "url":  "https://deepmind.google",
+                                                                                "claim":  "Agents Last Exam v1.1 达 71.6%、AutomationBench-AA 76.1%、OSWorld-2.1 77.6%，高吞吐 Swarm 分片并发极强。",
+                                                                                "date":  "2026-11-18"
+                                                                            }
+                                                                        ]
+                                                       },
+                                    "office_docs":  {
+                                                        "score":  5,
+                                                        "approved_score":  5,
+                                                        "source":  "public",
+                                                        "locked":  false,
+                                                        "confidence":  0.6,
+                                                        "evidence":  [
+                                                                         {
+                                                                             "url":  "user",
+                                                                             "claim":  "无 Codex 专属本地 Office 插件链。",
+                                                                             "date":  "2026-11-18"
+                                                                         }
+                                                                     ]
+                                                    }
+                                },
+                       "strengths":  [
+                                         "速度极快（约 2.5 倍于重型旗舰）且支持 Gemini 4 独有的 xhigh（4H Extra）深思档（AA 54 分，超越 Argon）",
+                                         "1M 超长上下文 + 高并发高吞吐，Agents Last Exam 71.6%、AutomationBench 76.1%，Swarm 分片首选底座",
+                                         "工具调用与虚构 API 幻觉较 3.8 Flash 大幅下降；日常替代 Carbon 承担前端起草、仓扫综述与常规审查，疑难时自动升级 Carbon"
+                                     ],
+                       "weaknesses":  [
+                                          "极高文笔要求（论文/深度长文）与极深跨跳知识（HLE）天花板不及 Carbon，且 xhigh 档延迟与 token 开销明显高于 high",
+                                          "不支持原生生图与 Codex Office 插件；极限底层后端与数学严谨性交 GPT-6.2 Astra"
+                                      ],
+                       "last_researched":  "2026-11-18",
+                       "evidence":  [
+                                        {
+                                            "url":  "user",
+                                            "claim":  "用户指令（2026-11-18）：在要求用 Gemini 4H Extra（xhigh）快速使用时，加入 4H 承担大部分原 Carbon 任务，仅少数高要求任务使用 Carbon。",
+                                            "date":  "2026-11-18"
+                                        },
+                                        {
+                                            "url":  "https://blog.google",
+                                            "claim":  "2026-11-12 发布；xhigh AA Index 54 分，Terminal-Bench 4.1 57.0%，1M 上下文，2.5x 速度提升。",
+                                            "date":  "2026-11-18"
+                                        }
+                                    ]
+                   }
+               ],
+    "aliases":  {
+                    "best-rigor":  "gpt-6.2-astra",
+                    "best-math":  "gpt-6.2-astra",
+                    "best-image":  "gpt-6.2-astra",
+                    "best-prose":  "gemini-4-carbon",
+                    "best-knowledge":  "gemini-4-carbon",
+                    "best-aesthetic":  "claude-opus-5-5"
+                },
+    "registry_rev":  12,
+    "updated":  "2026-11-18T14:32:00.0000000Z"
+}

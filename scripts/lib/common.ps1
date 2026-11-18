@@ -295,7 +295,7 @@ function Read-State {
     $state = Read-JsonFile -Path $Paths.State
     if ($null -eq $state) { $state = [pscustomobject]@{} }
     foreach ($name in @(
-        'sources', 'exhausted', 'low', 'research_leases', 'codex_exe_cache'
+        'sources', 'exhausted', 'low', 'research_leases', 'codex_exe_cache', 'codex_features_cache'
     )) {
         if ($null -eq (Get-OrchestraProperty $state $name)) {
             Set-OrchestraProperty $state $name ([pscustomobject]@{})
@@ -1212,6 +1212,135 @@ function Resolve-CodexExe {
         }
     }
     return [string]$winner.path
+}
+
+function Get-CodexSupportedFeatures {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [hashtable]$Paths = $null,
+        [switch]$NoStateCache
+    )
+    if (
+        [string]::IsNullOrWhiteSpace($Executable) -or
+        [IO.Path]::GetExtension($Executable) -ieq '.ps1' -or
+        -not [IO.File]::Exists($Executable)
+    ) {
+        return $null
+    }
+    $item = Get-Item -LiteralPath $Executable
+    $fullPath = $item.FullName
+    $len = [long]$item.Length
+    $mtime = $item.LastWriteTimeUtc.ToString('o')
+    if (-not $NoStateCache -and $null -ne $Paths) {
+        try {
+            $st = Read-State -Paths $Paths
+            $fc = Get-OrchestraProperty $st 'codex_features_cache'
+            if (
+                $null -ne $fc -and
+                [string](Get-OrchestraProperty $fc 'path' '') -ceq $fullPath -and
+                [long](Get-OrchestraProperty $fc 'length' -1) -eq $len -and
+                [string](Get-OrchestraProperty $fc 'last_write_utc' '') -ceq $mtime
+            ) {
+                $cachedArr = @(Get-OrchestraArray $fc 'features')
+                if ($cachedArr.Count -gt 0) {
+                    $cachedSet = @{}
+                    foreach ($f in $cachedArr) {
+                        $fs = ([string]$f).Trim()
+                        if ($fs.Length -gt 0) { $cachedSet[$fs] = $true }
+                    }
+                    return $cachedSet
+                }
+            }
+        }
+        catch {}
+    }
+
+    try {
+        $probe = Invoke-OrchestraProcess -FilePath $fullPath `
+            -Arguments @('features', 'list') -TimeoutSec 5 -CaptureStdout
+        if ($probe.timeout -or $probe.truncated -or $probe.exit_code -ne 0) {
+            return $null
+        }
+        $list = New-Object 'System.Collections.Generic.List[string]'
+        $map = @{}
+        foreach ($line in @($probe.stdout)) {
+            if ([string]$line -match '^\s*([a-z0-9_]+)\s+(.+?)\s+(?:true|false)\s*$') {
+                $feat = $Matches[1]
+                $stage = $Matches[2].Trim().ToLowerInvariant()
+                if ($stage -ne 'removed' -and -not $map.ContainsKey($feat)) {
+                    $map[$feat] = $true
+                    [void]$list.Add($feat)
+                }
+            }
+        }
+        if ($list.Count -eq 0) { return $null }
+        if (-not $NoStateCache -and $null -ne $Paths) {
+            try {
+                Invoke-WithLock -Paths $Paths -Name state -ScriptBlock {
+                    $fresh = Read-State -Paths $Paths
+                    Set-OrchestraProperty $fresh 'codex_features_cache' ([pscustomobject]@{
+                        path = $fullPath
+                        length = $len
+                        last_write_utc = $mtime
+                        features = @($list.ToArray())
+                        checked_utc = (Get-OrchestraNow).ToString('o')
+                    })
+                    Save-State -Paths $Paths -State $fresh
+                }
+            }
+            catch {}
+        }
+        return $map
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-CodexStealthArguments {
+    param(
+        [hashtable]$SupportedFeatures = $null,
+        [string[]]$Tags = @()
+    )
+    $out = New-Object 'System.Collections.Generic.List[string]'
+    $enableCandidates = @('skip_host_skill_discovery', 'omit_skill_descriptions')
+    $enabledUnstable = $false
+    foreach ($feat in $enableCandidates) {
+        if ($null -eq $SupportedFeatures -or $SupportedFeatures.ContainsKey($feat)) {
+            $enabledUnstable = $true
+            break
+        }
+    }
+    if ($enabledUnstable) {
+        [void]$out.Add('-c')
+        [void]$out.Add('suppress_unstable_features_warning=true')
+    }
+    foreach ($feat in $enableCandidates) {
+        if ($null -eq $SupportedFeatures -or $SupportedFeatures.ContainsKey($feat)) {
+            [void]$out.Add('--enable')
+            [void]$out.Add($feat)
+        }
+    }
+    $disableCandidates = @(
+        'plugins', 'plugin_discovery_prefetch', 'remote_plugin',
+        'apps', 'browser_use', 'browser_use_external', 'computer_use',
+        'in_app_browser', 'in_app_chat', 'in_app_dictation',
+        'in_app_local_automation', 'in_app_updates', 'in_app_voice',
+        'multi_agent', 'shell_snapshot', 'skill_search',
+        'skill_mcp_dependency_install', 'tool_suggest',
+        'tool_call_mcp_elicitation', 'deferred_tool_world_state',
+        'image_generation', 'guardian_approval'
+    )
+    foreach ($feat in $disableCandidates) {
+        if ($feat -eq 'image_generation' -and (@($Tags) -contains 'image_gen')) {
+            continue
+        }
+        if ($null -eq $SupportedFeatures -or $SupportedFeatures.ContainsKey($feat)) {
+            [void]$out.Add('--disable')
+            [void]$out.Add($feat)
+        }
+    }
+    return @($out.ToArray())
 }
 
 function Get-AgyWrapperPath {

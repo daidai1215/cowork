@@ -1,134 +1,134 @@
-# 主力模型优缺点与口碑档案（Model Profiles）
+# Model Profiles (Strengths & Pitfalls)
 
 <!-- AUTO:ROSTER:START -->
-> 自动同步自 `registry/models.json` (`registry_rev: 12`, 活跃模型: 4)
+> Auto-synced from `registry/models.json` (`registry_rev: 13`, active: 4)
 
-| 模型 | ID / 通道 | 默认档位 | 顶级长板（>=9） | 额度 (`quota_rank`) | 速度 (`speed_rank`) | 运行特性 |
+| Model | ID / Channel | Effort | Top Strengths (>=9) | Quota | Speed | Traits |
 |---|---|---|---|---|---|---|
-| **Claude Opus 5.5** | `claude-opus-5-5` (`agy`) | `high` | frontend_aesthetic (10), agentic_coding (9.5) | 1 (稀缺) | 2 (居中) | 仅审查/把关（禁主写）; tools: `web_search`, `browser` |
-| **Gemini 4 Carbon** | `gemini-4-carbon` (`agy`) | `high` | long_context (10), prose (10), world_knowledge (10), agentic_coding (9) | 3 (充裕) | 2 (居中) | tools: `web_search`, `browser`, `long_context_1m` |
-| **GPT-6.2 Astra** | `gpt-6.2-astra` (`codex`) | `high` (攻坚 `xhigh`) | backend (10), code_rigor (10), image_gen (10), math (10), agentic_coding (9.5), office_docs (9.5), long_context (9) | 2 (中等) | 1 (较慢) | Cockpit 自动切号自愈; tools: `image_gen`, `office_plugins`, `latex`, `browser`, `computer_use` |
-| **Gemini 4 Hydrogen** | `gemini-4-hydrogen` (`agy`) | `xhigh` | long_context (9.5) | 3 (充裕) | 3 (最快) | tools: `web_search`, `browser`, `long_context_1m` |
+| **Claude Opus 5.5** | `claude-opus-5-5` (`agy`) | `high` | frontend_aesthetic (10), agentic_coding (9.5) | 1 (scarce) | 2 (medium) | Review only; tools: `web_search`, `browser` |
+| **Gemini 4 Carbon** | `gemini-4-carbon` (`agy`) | `high` | long_context (10), prose (10), world_knowledge (10), agentic_coding (9) | 3 (abundant) | 2 (medium) | tools: `web_search`, `browser`, `long_context_1m` |
+| **GPT-6.2 Astra** | `gpt-6.2-astra` (`codex`) | `high` (peak `xhigh`) | backend (10), code_rigor (10), image_gen (10), math (10), agentic_coding (9.5), office_docs (9.5), long_context (9) | 2 (medium) | 1 (slower) | Cockpit rotation; tools: `image_gen`, `office_plugins`, `latex`, `browser`, `computer_use` |
+| **Gemini 4 Hydrogen** | `gemini-4-hydrogen` (`agy`) | `xhigh` | long_context (9.5) | 3 (abundant) | 3 (fastest) | tools: `web_search`, `browser`, `long_context_1m` |
 
-- **可用额度排序（低 → 高）**: Claude Opus 5.5 (`claude-opus-5-5`) < GPT-6.2 Astra (`gpt-6.2-astra`) < Gemini 4 Carbon (`gemini-4-carbon`) < Gemini 4 Hydrogen (`gemini-4-hydrogen`)
-- **响应速度排序（快 → 慢）**: Gemini 4 Hydrogen (`gemini-4-hydrogen`) > Claude Opus 5.5 (`claude-opus-5-5`) > Gemini 4 Carbon (`gemini-4-carbon`) > GPT-6.2 Astra (`gpt-6.2-astra`)
-- **通道池并发上限 (`pool_concurrency_limits`)**: `codex_openai` <= 4, `agy_anthropic` <= 3, `agy_google` <= 7
+- **Quota (Low->High)**: `claude-opus-5-5` < `gpt-6.2-astra` < `gemini-4-carbon` < `gemini-4-hydrogen`
+- **Speed (Fast->Slow)**: `gemini-4-hydrogen` > `claude-opus-5-5` > `gemini-4-carbon` > `gpt-6.2-astra`
+- **Pool Limits**: `codex_openai` <= 4, `agy_anthropic` <= 3, `agy_google` <= 7
 <!-- AUTO:ROSTER:END -->
 
-### 标准别名与典型路由速查
+### Aliases & Typical Routing
 
 <!-- AUTO:ROUTING:START -->
-- **标准能力别名**: `best-aesthetic` -> `claude-opus-5-5`, `best-image` -> `gpt-6.2-astra`, `best-knowledge` -> `gemini-4-carbon`, `best-math` -> `gpt-6.2-astra`, `best-prose` -> `gemini-4-carbon`, `best-rigor` -> `gpt-6.2-astra`
-- **默认路由模式**: `peak` (零额度/速度扣分，纯能力上限优先)
+- **Aliases**: `best-aesthetic` -> `claude-opus-5-5`, `best-image` -> `gpt-6.2-astra`, `best-knowledge` -> `gemini-4-carbon`, `best-math` -> `gpt-6.2-astra`, `best-prose` -> `gemini-4-carbon`, `best-rigor` -> `gpt-6.2-astra`
+- **Default Mode**: `peak` (peak capability, zero penalty)
 
-| 典型场景 | 标签 (`-Tags`) | 主执行 (`primary`) | 审查 (`reviewer`) | 润色 (`polisher`) | 协作模式 (`pattern`) |
+| Scenario | `-Tags` | Primary | Reviewer | Polisher | Pattern |
 |---|---|---|---|---|---|
-| 前端页面 / 落地页 | `frontend,landing_page` | `gemini-4-carbon` | `claude-opus-5-5` | - | `aesthetic_gate` |
-| 后端 / API / 并发 | `backend,concurrency` | `gpt-6.2-astra` | `gemini-4-carbon` | - | `pipelined_review` |
-| 数学推导 / 算法 | `math,algorithm` | `gpt-6.2-astra` (`xhigh`) | `gemini-4-carbon` | - | `pipelined_review` |
-| 疑难 Bug / 根因定位 | `bugfix` | `gpt-6.2-astra` | `gemini-4-carbon` | - | `pipelined_review` |
-| 论文 / 长文 / 文案 | `prose,paper` | `gemini-4-carbon` | `gpt-6.2-astra` | - | `pipelined_review` |
-| 配图 / 插画 / Mockup | `image_gen` | `gpt-6.2-astra` | `claude-opus-5-5` | - | `strength_delegation` |
-| PPT / Word / Excel | `office,ppt` | `gpt-6.2-astra` | `claude-opus-5-5` | - | `strength_delegation` |
-| 检索 / 综述 / 大仓库理解 | `research,long_context` | `gemini-4-carbon` | `gpt-6.2-astra` | - | `pipelined_review` |
+| Frontend/UI | `frontend,landing_page` | `gemini-4-carbon` | `claude-opus-5-5` | - | `aesthetic_gate` |
+| Backend/API | `backend,concurrency` | `gpt-6.2-astra` | `gemini-4-carbon` | - | `pipelined_review` |
+| Math/Algo | `math,algorithm` | `gpt-6.2-astra` (`xhigh`) | `gemini-4-carbon` | - | `pipelined_review` |
+| Bugfix | `bugfix` | `gpt-6.2-astra` | `gemini-4-carbon` | - | `pipelined_review` |
+| Paper/Prose | `prose,paper` | `gemini-4-carbon` | `gpt-6.2-astra` | - | `pipelined_review` |
+| Image Gen | `image_gen` | `gpt-6.2-astra` | `claude-opus-5-5` | - | `strength_delegation` |
+| Office/PPT | `office,ppt` | `gpt-6.2-astra` | `claude-opus-5-5` | - | `strength_delegation` |
+| Repo Research | `research,long_context` | `gemini-4-carbon` | `gpt-6.2-astra` | - | `pipelined_review` |
 
-- **4H Extra 快速模式 (`-Mode fast_4h`)**: 将大部分 `gemini-4-carbon` 任务下放 `gemini-4-hydrogen` (`xhigh`)，仅高要求主写 (`paper`, `essay`, `copywriting`, `architecture`), 高要求审查 (`math`, `algorithm`, `architecture`) 及 `-AllowEscalation` 保留给 `gemini-4-carbon` (后端/数学/生图/Office 主攻仍由 GPT-6.2 Astra 承担):
+- **`-Mode fast_4h`**: `gemini-4-carbon`->`gemini-4-hydrogen` (`xhigh`), keeping `gemini-4-carbon` for `paper`, `essay`, `copywriting`, `architecture`/`math`, `algorithm`, `architecture` & `-AllowEscalation`:
 
-| 快速场景 (`fast_4h`) | `-Tags` | 主执行 | 审查 | 升级兜底 |
+| Fast | `-Tags` | Primary | Reviewer | Escalate |
 |---|---|---|---|---|
-| 前端 / UI / 落地页 | `frontend,landing_page` | `gemini-4-hydrogen` (`xhigh`) | `claude-opus-5-5` (`high`) | `gemini-4-carbon` |
-| 检索 / 大仓库预读 | `research,long_context` | `gemini-4-hydrogen` (`xhigh`) | `gpt-6.2-astra` (`high`) | `gemini-4-carbon` |
-| 日常文档 / 总结 | `prose` | `gemini-4-hydrogen` (`xhigh`) | `gpt-6.2-astra` (`high`) | `gemini-4-carbon` |
-| 高要求论文 / 深度长文 | `prose,paper` | `gemini-4-carbon` (`high`) | `gpt-6.2-astra` (`high`) | - |
-| 常规后端 / Bugfix | `bugfix` | `gpt-6.2-astra` (`high`) | `gemini-4-hydrogen` (`xhigh`) | - |
-| 数学 / 算法验算 | `math,algorithm` | `gpt-6.2-astra` (`xhigh`) | `gemini-4-carbon` (`high`) | - |
+| Frontend/UI | `frontend,landing_page` | `gemini-4-hydrogen` (`xhigh`) | `claude-opus-5-5` (`high`) | `gemini-4-carbon` |
+| Repo Pre-Read | `research,long_context` | `gemini-4-hydrogen` (`xhigh`) | `gpt-6.2-astra` (`high`) | `gemini-4-carbon` |
+| Routine Docs | `prose` | `gemini-4-hydrogen` (`xhigh`) | `gpt-6.2-astra` (`high`) | `gemini-4-carbon` |
+| Paper/Long Prose | `prose,paper` | `gemini-4-carbon` (`high`) | `gpt-6.2-astra` (`high`) | - |
+| Backend/Bugfix | `bugfix` | `gpt-6.2-astra` (`high`) | `gemini-4-hydrogen` (`xhigh`) | - |
+| Math/Algo | `math,algorithm` | `gpt-6.2-astra` (`xhigh`) | `gemini-4-carbon` (`high`) | - |
 
-- **主控感知三档自动分层 (`-HostModel orchestrator|carbon|hydrogen`)**: 依据主控环境自动切换 `orchestrator_fast` / `carbon_peak` / `hydrogen_max` (4H: `scan` -> `medium`, `bulk`/`boilerplate`/`test_gen` -> `high`, 其余 -> `xhigh`):
+- **Host Tiers (`-HostModel orchestrator|carbon|hydrogen`)**: `orchestrator_fast` / `carbon_peak` / `hydrogen_max` (4H: `scan`->`medium`, `bulk/boilerplate/test_gen`->`high`, else `xhigh`):
 
-| 主控模式 (`-HostModel`) | 典型场景 | `-Tags` | 主执行 (`primary`) | 审查 (`reviewer`) | 终审 (`final_reviewer`) |
+| Host | Scenario | `-Tags` | Primary | Reviewer | Final Gate |
 |---|---|---|---|---|---|
-| `orchestrator` -> `orchestrator_fast` | 前端 / 常规研发 | `frontend,landing_page` | `gemini-4-hydrogen` (`xhigh`) | `claude-opus-5-5` (`high`) | - |
-| `orchestrator` -> `orchestrator_fast` | 架构设计 / 复杂后端 | `architecture` | `gpt-6.2-astra` (`high`) | `gemini-4-carbon` (`high`) | - |
-| `carbon` -> `carbon_peak` | 常规旗舰主控 | `frontend,landing_page` | `gemini-4-carbon` (`high`) | `claude-opus-5-5` (`high`) | - |
-| `carbon` -> `carbon_peak` | 批量机械分片 / 仓扫 | `bulk,scan` | `gemini-4-hydrogen` (`high`) | `gpt-6.2-astra` (`high`) | - |
-| `hydrogen` -> `hydrogen_max` | 常规 Bugfix | `bugfix` | `gpt-6.2-astra` (`high`) | `gemini-4-hydrogen` (`xhigh`) | - |
-| `hydrogen` -> `hydrogen_max` | 论文 / 长文终审门禁 | `prose,paper` | `gemini-4-hydrogen` (`xhigh`) | `gpt-6.2-astra` (`high`) | `gemini-4-carbon` |
+| `orchestrator` -> `orchestrator_fast` | Frontend/Dev | `frontend,landing_page` | `gemini-4-hydrogen` (`xhigh`) | `claude-opus-5-5` (`high`) | - |
+| `orchestrator` -> `orchestrator_fast` | Architecture | `architecture` | `gpt-6.2-astra` (`high`) | `gemini-4-carbon` (`high`) | - |
+| `carbon` -> `carbon_peak` | Flagship | `frontend,landing_page` | `gemini-4-carbon` (`high`) | `claude-opus-5-5` (`high`) | - |
+| `carbon` -> `carbon_peak` | Bulk/Scan | `bulk,scan` | `gemini-4-hydrogen` (`high`) | `gpt-6.2-astra` (`high`) | - |
+| `hydrogen` -> `hydrogen_max` | Bugfix | `bugfix` | `gpt-6.2-astra` (`high`) | `gemini-4-hydrogen` (`xhigh`) | - |
+| `hydrogen` -> `hydrogen_max` | Paper Gate | `prose,paper` | `gemini-4-hydrogen` (`xhigh`) | `gpt-6.2-astra` (`high`) | `gemini-4-carbon` |
 <!-- AUTO:ROUTING:END -->
 
 ---
 
 <!-- AUTO:PROFILES:START -->
-## 1. Claude Opus 5.5 (`high`) -- `anthropic` / `agy` | 仅审查/把关（禁主写）
+## 1. Claude Opus 5.5 (`high`) -- `anthropic` / `agy` | Review/gate only (primary disabled)
 
-- **10 维能力分** (`*`=锁定): `code_rigor`: 8.5, `backend`: 8, `math`: 8, `image_gen`: 0, `frontend_aesthetic`: 10*, `prose`: 8.5, `world_knowledge`: 8, `long_context`: 8, `agentic_coding`: 9.5, `office_docs`: 5
-- **额度 / 速度**: `quota_rank=1 (稀缺)`, `speed_rank=2 (居中)`
+- **10-Dim Scores** (`*`=locked): `code_rigor`: 8.5, `backend`: 8, `math`: 8, `image_gen`: 0, `frontend_aesthetic`: 10*, `prose`: 8.5, `world_knowledge`: 8, `long_context`: 8, `agentic_coding`: 9.5, `office_docs`: 5
+- **Quota / Speed**: `quota_rank=1 (scarce)`, `speed_rank=2 (medium)`
 
-**核心长板**:
-- 审美最好，尤其前端 UI / 落地页 / 视觉层级与细节质感
-- AA Coding Agent Index 全球第 1（62 分），多文件自主重构与架构品味极佳
-- 指令理解细腻
+**Core Strengths**:
+- Top aesthetic judgment for frontend UI, landing pages, visual hierarchy, and finish
+- AA Coding Agent Index #1 (62) with strong multi-file refactoring and architectural taste
+- Nuanced instruction comprehension
 
-**短板与避坑**:
-- 单池额度最稀缺，必须惜用（只做决策拍板、审美把关与精简终裁，不铺写大段初稿）
-- 速度居中（慢于 Gemini 4 Carbon / Hydrogen，快于 GPT-6.2 Astra）
-- 不能原生生图
+**Weaknesses & Pitfalls**:
+- Scarcest shared quota pool; conserve strictly for aesthetic gates, key decisions, and <=800w arbitration (never long primary drafts)
+- Medium latency (slower than Gemini 4 Carbon/Hydrogen, faster than GPT-6.2 Astra)
+- No native image generation
 
 ---
 
 ## 2. Gemini 4 Carbon (`high`) -- `google` / `agy`
 
-- **10 维能力分** (`*`=锁定): `code_rigor`: 8.5, `backend`: 8.5, `math`: 8.5, `image_gen`: 0, `frontend_aesthetic`: 8, `prose`: 10*, `world_knowledge`: 10*, `long_context`: 10, `agentic_coding`: 9, `office_docs`: 5
-- **额度 / 速度**: `quota_rank=3 (充裕)`, `speed_rank=2 (居中)`
+- **10-Dim Scores** (`*`=locked): `code_rigor`: 8.5, `backend`: 8.5, `math`: 8.5, `image_gen`: 0, `frontend_aesthetic`: 8, `prose`: 10*, `world_knowledge`: 10*, `long_context`: 10, `agentic_coding`: 9, `office_docs`: 5
+- **Quota / Speed**: `quota_rank=3 (abundant)`, `speed_rank=2 (medium)`
 
-**核心长板**:
-- 文笔最好、自然去 AI 腔，LMArena 文本总榜第 1
-- 世界知识与联网检索综述最强（AA Intelligence Index v5 60 分、Omniscience 第 1、HLE 69.1%）
-- 1M 超长上下文（整仓深读、长文档图推理极强）
-- 快速模式下专守论文/长文/深度定稿与数学/算法复核等少数高要求关口，日常负载可无缝下放 4H Extra
+**Core Strengths**:
+- Best natural prose without AI filler; LMArena Text Arena #1
+- Top world knowledge and synthesis (AA Intelligence Index v5 60, Omniscience #1, HLE 69.1%)
+- 1M context window for deep whole-repo reading and long-document graph reasoning
+- In fast modes, focuses on high-bar papers/prose/architecture and math/algorithm verification while offloading routine loads to 4H Extra
 
-**短板与避坑**:
-- AA 实测幻觉率约 11%，涉及文献、具体数值与 API 事实时必须经过 Truth Gate 双查
-- 极限形式数学与底层后端严谨性略逊于 GPT-6.2 Astra；响应慢于 4H Extra
-- 前端视觉品味虽强（WebDev 第 4），仍次于 Opus 5.5
-- 不支持原生图像生成，无 Codex 专属本地 Office 插件链
+**Weaknesses & Pitfalls**:
+- ~11% AA hallucination rate; verify citations, exact numbers, and API signatures via Truth Gate
+- Formal math and backend edge-case rigor trail GPT-6.2 Astra; slower than 4H Extra
+- Strong frontend taste (WebDev #4) but trails Opus 5.5
+- No native image_gen or Codex local Office plugin chain
 
 ---
 
-## 3. GPT-6.2 Astra (`high` / 攻坚 `xhigh`) -- `openai` / `codex`
+## 3. GPT-6.2 Astra (`high` / peak `xhigh`) -- `openai` / `codex`
 
-- **10 维能力分** (`*`=锁定): `code_rigor`: 10*, `backend`: 10*, `math`: 10*, `image_gen`: 10*, `frontend_aesthetic`: 7.5, `prose`: 7, `world_knowledge`: 8.5, `long_context`: 9, `agentic_coding`: 9.5, `office_docs`: 9.5
-- **额度 / 速度**: `quota_rank=2 (中等)`, `speed_rank=1 (较慢)`
+- **10-Dim Scores** (`*`=locked): `code_rigor`: 10*, `backend`: 10*, `math`: 10*, `image_gen`: 10*, `frontend_aesthetic`: 7.5, `prose`: 7, `world_knowledge`: 8.5, `long_context`: 9, `agentic_coding`: 9.5, `office_docs`: 9.5
+- **Quota / Speed**: `quota_rank=2 (medium)`, `speed_rank=1 (slower)`
 
-**核心长板**:
-- OpenAI 最新旗舰（2026-11-17）：AA Intelligence Index 62 分（全球第 2），GPQA 97%，科研与数学推导再创新高
-- 扩展至 1M 上下文窗口且支持 $0.40/M 缓存定价，后端契约、极端边界与并发严谨性极强
-- 生图最强（Codex 内置 image_gen）与 Office/PPT/LaTeX 生态完备
+**Core Strengths**:
+- OpenAI latest flagship (2026-11-17): AA Intelligence Index 62 (#2), GPQA 97%, top scientific and mathematical reasoning
+- 1M context window with $0.40/M cached input pricing; top rigor on backend contracts, edge cases, and concurrency
+- Best image_gen (Codex built-in) and full Office/PPT/LaTeX ecosystem
 
-**短板与避坑**:
-- AA Omniscience 事实幻觉率从 50% 升至 59%，涉及文献引用、API 签名与客观数值时绝不可跳过 Truth Gate
-- AA Coding Agent Index 相比 6 Astra 未拉大代差；前端 UI 审美仍不如 Opus 5.5
-- 单账号额度依赖 Cockpit 自动切号，四家中响应最慢，日常批量分片编码推荐配合 4H Extra
+**Weaknesses & Pitfalls**:
+- AA Omniscience hallucination rate rose from 50% to 59%; never skip Truth Gate on citations, API signatures, or numeric facts
+- No large Coding Agent jump over 6 Astra; frontend UI taste trails Opus 5.5
+- Per-account quota relies on Cockpit auto-rotation and is slowest of all 4 models; pair with 4H Extra for parallel bulk shards
 
 ---
 
 ## 4. Gemini 4 Hydrogen (`xhigh`) -- `google` / `agy`
 
-- **10 维能力分** (`*`=锁定): `code_rigor`: 8, `backend`: 8, `math`: 8, `image_gen`: 0, `frontend_aesthetic`: 7.5, `prose`: 8, `world_knowledge`: 8.5, `long_context`: 9.5, `agentic_coding`: 8.5, `office_docs`: 5
-- **额度 / 速度**: `quota_rank=3 (充裕)`, `speed_rank=3 (最快)`
+- **10-Dim Scores** (`*`=locked): `code_rigor`: 8, `backend`: 8, `math`: 8, `image_gen`: 0, `frontend_aesthetic`: 7.5, `prose`: 8, `world_knowledge`: 8.5, `long_context`: 9.5, `agentic_coding`: 8.5, `office_docs`: 5
+- **Quota / Speed**: `quota_rank=3 (abundant)`, `speed_rank=3 (fastest)`
 
-**核心长板**:
-- 速度极快（约 2.5 倍于重型旗舰）且支持 Gemini 4 独有的 xhigh（4H Extra）深思档（AA 54 分，超越 Argon）
-- 1M 超长上下文 + 高并发高吞吐，Agents Last Exam 71.6%、AutomationBench 76.1%，Swarm 分片首选底座
-- 工具调用与虚构 API 幻觉较 3.8 Flash 大幅下降；日常替代 Carbon 承担前端起草、仓扫综述与常规审查，疑难时自动升级 Carbon
+**Core Strengths**:
+- ~2.5x faster than heavy flagships with exclusive xhigh (4H Extra) tier (AA 54, surpassing Argon)
+- 1M context + high concurrency (Agents Last Exam 71.6%, AutomationBench 76.1%); default Swarm shard workhorse
+- Much lower API/tool hallucination than Flash 3.8; handles routine UI drafts, repo scans, and checks with seamless Carbon escalation
 
-**短板与避坑**:
-- 极高文笔要求（论文/深度长文）与极深跨跳知识（HLE）天花板不及 Carbon，且 xhigh 档延迟与 token 开销明显高于 high
-- 不支持原生生图与 Codex Office 插件；极限底层后端与数学严谨性交 GPT-6.2 Astra
+**Weaknesses & Pitfalls**:
+- High-bar prose (papers/essays) and deep multi-hop knowledge (HLE) trail Carbon; xhigh has higher latency/tokens than high/medium
+- No native image_gen or Codex Office plugins; route extreme backend/math rigor to GPT-6.2 Astra
 <!-- AUTO:PROFILES:END -->
 
 ---
 
-## 附：模型阵容更换与未来新模型自评估
+## Roster Customization & Auto-Discovery
 
-1. **安装或更换默认阵容（`scripts/setup.ps1`）**：随时可通过 `setup.ps1 -Models <模型1,模型2,...> [-ReviewOnlyModels <审查专用模型>] -Evaluate <auto|research|probe|full>` 自选本机任意可用模型组合，自动完成 10 维能力评测、异构核验/实测盲评、重绑 `best-*` 别名并同步渲染本页档案。
-2. **后台自动发现新模型（`scripts/detect-models.ps1`）**：自动对比 `agy models` 与 Codex 目录中的基线（安装时未选中的存量模型已自动记入 `baseline_slugs` 不打扰）。一旦官方上线全新模型，后台按 `references/research-protocol.md` 联网调研 + 异构交叉核验，以 `candidate` 试运行或生成待批提案。
+1. **Customize / Switch Roster (`scripts/setup.ps1`)**: Run `setup.ps1 -Models <m1,m2,...> [-ReviewOnlyModels <r1,...>] -Evaluate <auto|research|probe|full>` to select any local `agy`/`Codex` models, run 10-dim research + heterogeneous blind probes, rebind `best-*` aliases, and sync docs.
+2. **Background Model Discovery (`scripts/detect-models.ps1`)**: Compares live `agy` and Codex catalogs against `baseline_slugs`; newly released models trigger background research per `references/research-protocol.md` (trial as `candidate` or emit proposals).

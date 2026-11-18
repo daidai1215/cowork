@@ -1987,24 +1987,39 @@ service_tier = "ignored-hook-tier"
     $ignoreCfgIdx = [Array]::IndexOf($cfgDryArgv, '--ignore-user-config')
     $ignoreRulesIdx = [Array]::IndexOf($cfgDryArgv, '--ignore-rules')
     $cDirIdx = [Array]::IndexOf($cfgDryArgv, '-C')
-    Assert-Test 'Codex pure-brain extracts scalar config.toml overrides, ignores plugins/MCP/auth.json, and passes --ignore-user-config --ignore-rules' (
+    $expectedStealthDisables = @(
+        'plugins', 'plugin_discovery_prefetch', 'remote_plugin',
+        'apps', 'browser_use', 'browser_use_external', 'computer_use',
+        'in_app_browser', 'in_app_chat', 'in_app_dictation',
+        'in_app_local_automation', 'in_app_updates', 'in_app_voice',
+        'multi_agent', 'shell_snapshot', 'skill_search',
+        'skill_mcp_dependency_install', 'tool_suggest',
+        'tool_call_mcp_elicitation', 'deferred_tool_world_state',
+        'image_generation', 'guardian_approval'
+    )
+    Assert-Test 'Codex pure-brain extracts scalar config.toml overrides, ignores MCP/auth.json, emits --ignore-user-config --ignore-rules, and trims 22 stealth features' (
         $parsedCfg.model_provider -eq 'custom-proxy' -and
         $parsedCfg.forced_login_method -eq 'chatgpt' -and
         $parsedCfg.service_tier -eq 'fast' -and
         $parsedCfg.windows_sandbox -eq 'elevated' -and
         $cfgDryRun.code -eq 0 -and
         $cfgDryRun.json.codex_fast_config -eq $true -and
+        $cfgDryRun.json.codex_stealth_trimmed -eq $true -and
         $ignoreCfgIdx -ge 0 -and $ignoreRulesIdx -gt $ignoreCfgIdx -and $cDirIdx -gt $ignoreRulesIdx -and
         ($cfgDryArgv -contains 'model_provider="custom-proxy"') -and
         ($cfgDryArgv -contains 'forced_login_method="chatgpt"') -and
         ($cfgDryArgv -contains 'service_tier="fast"') -and
         ($cfgDryArgv -contains 'windows.sandbox="elevated"') -and
+        ($cfgDryArgv -contains 'suppress_unstable_features_warning=true') -and
+        ($cfgDryArgv -contains 'skip_host_skill_discovery') -and
+        ($cfgDryArgv -contains 'omit_skill_descriptions') -and
+        (@($expectedStealthDisables | Where-Object { $cfgDryArgv -notcontains $_ }).Count -eq 0) -and
         ($cfgDryArgv -contains 'shell_tool') -and
         ($cfgDryArgv -contains 'unified_exec') -and
-        (-not ($cfgDryArgv -match 'plugins|mcp_servers|ignored-'))
+        (-not ($cfgDryArgv -match 'mcp_servers|ignored-'))
     )
 
-    # (k) Rev 12: -AllowCodexShell, -Tags image_gen, and -FullCodexConfig suppress codex_fast_config
+    # (k) Rev 12/13: -AllowCodexShell, -Tags image_gen, and -FullCodexConfig suppress codex_fast_config & codex_stealth_trimmed
     $suppShellRun = Invoke-TestScript -Script $invokeScript -Arguments (
         $baseArguments + @('-Model', 'gpt-6-astra', '-AllowCodexShell', '-Prompt', 'TEST', '-DryRun')
     )
@@ -2014,18 +2029,27 @@ service_tier = "ignored-hook-tier"
     $suppFullRun = Invoke-TestScript -Script $invokeScript -Arguments (
         $baseArguments + @('-Model', 'gpt-6-astra', '-FullCodexConfig', '-Prompt', 'TEST', '-DryRun')
     )
-    Assert-Test '-AllowCodexShell, -Tags image_gen, and -FullCodexConfig suppress codex_fast_config' (
+    Assert-Test '-AllowCodexShell, -Tags image_gen, and -FullCodexConfig suppress codex_fast_config and stealth trimming' (
         $suppShellRun.code -eq 0 -and $suppShellRun.json.codex_fast_config -eq $false -and
+        $suppShellRun.json.codex_stealth_trimmed -eq $false -and
         (@($suppShellRun.json.arguments) -notcontains '--ignore-user-config') -and
         (@($suppShellRun.json.arguments) -notcontains '--ignore-rules') -and
+        (@($suppShellRun.json.arguments) -notcontains 'skip_host_skill_discovery') -and
+        (@($suppShellRun.json.arguments) -notcontains 'plugins') -and
         $suppImgRun.code -eq 0 -and $suppImgRun.json.codex_fast_config -eq $false -and
+        $suppImgRun.json.codex_stealth_trimmed -eq $false -and
         (@($suppImgRun.json.arguments) -notcontains '--ignore-user-config') -and
         (@($suppImgRun.json.arguments) -notcontains '--ignore-rules') -and
+        (@($suppImgRun.json.arguments) -notcontains 'skip_host_skill_discovery') -and
+        (@($suppImgRun.json.arguments) -notcontains 'plugins') -and
         $suppFullRun.code -eq 0 -and $suppFullRun.json.codex_fast_config -eq $false -and
+        $suppFullRun.json.codex_stealth_trimmed -eq $false -and
         $suppFullRun.json.codex_shell_enabled -eq $false -and
         (@($suppFullRun.json.arguments) -contains 'shell_tool') -and
         (@($suppFullRun.json.arguments) -notcontains '--ignore-user-config') -and
-        (@($suppFullRun.json.arguments) -notcontains '--ignore-rules')
+        (@($suppFullRun.json.arguments) -notcontains '--ignore-rules') -and
+        (@($suppFullRun.json.arguments) -notcontains 'skip_host_skill_discovery') -and
+        (@($suppFullRun.json.arguments) -notcontains 'plugins')
     )
 
     # (l) Rev 12: -Ephemeral, -AutoRecordOk --ephemeral, -KeepSession, conflicts, and -AutoRecordOk on null session_id
@@ -2311,6 +2335,98 @@ exit 0
         $agyAutoOkRun.code -eq 0 -and
         $agyAutoOkRun.json.outcome_recorded -eq 'ok' -and
         $agyAutoOkRun.json.codex_ephemeral -eq $false
+    )
+
+    # (r) Rev 13: -AutoRecordOk uses fast in-process outcome logging for active models and retains record-outcome.ps1 candidate promotion
+    $agyAutoOkPaths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir $agyAutoOkState
+    $agyAutoOkOutcomes = @(
+        Read-UsageEvents -Paths $agyAutoOkPaths | Where-Object {
+            (Get-OrchestraProperty $_ 'type') -eq 'outcome' -and
+            (Get-OrchestraProperty $_ 'invocation_id') -eq $agyAutoOkRun.json.invocation_id
+        }
+    )
+    $candReg = Read-JsonFile -Path $fixtureRegistry
+    $candAutoModel = New-TestModel 'candidate-auto' 'codex' 'candidate'
+    Set-OrchestraProperty $candReg 'models' (@($candReg.models) + @($candAutoModel))
+    $candRegistry = Join-Path $sandbox 'registry\models-cand-auto.json'
+    Write-JsonAtomic -Path $candRegistry -Object $candReg
+    $candState = Join-Path $sandbox 'rev13-cand-state'
+    $candPaths = Get-OrchestraPaths -RegistryPath $candRegistry -StateDir $candState
+    foreach ($n in 1..2) {
+        Add-UsageEvent -Paths $candPaths -Event @{
+            type = 'invocation'; invocation_id = "cand-seed-$n"
+            ts = (Get-OrchestraNow).ToString('o')
+            model = 'candidate-auto'; channel = 'codex'; tags = @('backend')
+            access = 'read'; duration_sec = 0.1; exit = 0
+            quota_error = $false; session_id = "cand-sess-$n"
+        }
+        Add-UsageEvent -Paths $candPaths -Event @{
+            type = 'outcome'; invocation_id = "cand-seed-$n"
+            ts = (Get-OrchestraNow).ToString('o')
+            outcome = 'ok'; note = ''
+        }
+    }
+    $candCodexHome = Join-Path $sandbox 'rev13-cand-codex-home'
+    [void][IO.Directory]::CreateDirectory($candCodexHome)
+    [IO.File]::WriteAllBytes((Join-Path $candCodexHome 'auth.json'), $script:OrchestraUtf8.GetBytes('{"fixture":"cand"}'))
+    $prevCodexBinCand = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_CODEX')
+    $prevCodexHomeCand = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME')
+    $candAutoRun = $null
+    try {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX', $fakeCodexPath)
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME', $candCodexHome)
+        $candAutoRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+            '-RegistryPath', $candRegistry, '-StateDir', $candState,
+            '-WorkDir', $sandbox, '-Model', 'candidate-auto',
+            '-Tags', 'math', '-Prompt', 'SUCCESS_TEXT', '-AutoRecordOk'
+        )
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX', $prevCodexBinCand)
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME', $prevCodexHomeCand)
+    }
+    $candRegAfter = Read-JsonFile -Path $candRegistry
+    $promotedCand = @($candRegAfter.models | Where-Object { $_.id -eq 'candidate-auto' })[0]
+    Assert-Test '-AutoRecordOk fast-path records outcome on active models in-process and promotes candidates via record-outcome.ps1' (
+        $agyAutoOkOutcomes.Count -eq 1 -and
+        $agyAutoOkOutcomes[0].outcome -eq 'ok' -and
+        [string](Get-OrchestraProperty $agyAutoOkOutcomes[0] 'note' '') -eq '' -and
+        $candAutoRun.code -eq 0 -and
+        $candAutoRun.json.outcome_recorded -eq 'ok' -and
+        $promotedCand.status -eq 'active'
+    )
+
+    # (s) Rev 13 fix: Get-CodexSupportedFeatures cache + Get-CodexStealthArguments safe filtering
+    $fcDummyExe = Join-Path $sandbox 'dummy-codex-features.exe'
+    [IO.File]::WriteAllBytes($fcDummyExe, [byte[]]@(1, 2, 3, 4))
+    $fcItem = Get-Item -LiteralPath $fcDummyExe
+    $fcPaths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir (Join-Path $sandbox 'fc-state')
+    Invoke-WithLock -Paths $fcPaths -Name state -ScriptBlock {
+        $fcState = Read-State -Paths $fcPaths
+        Set-OrchestraProperty $fcState 'codex_features_cache' ([pscustomobject]@{
+            path = $fcItem.FullName
+            length = [long]$fcItem.Length
+            last_write_utc = $fcItem.LastWriteTimeUtc.ToString('o')
+            features = @('plugins', 'apps', 'image_generation')
+            checked_utc = (Get-OrchestraNow).ToString('o')
+        })
+        Save-State -Paths $fcPaths -State $fcState
+    }
+    $cachedFeatMap = Get-CodexSupportedFeatures -Executable $fcDummyExe -Paths $fcPaths
+    $filteredDefault = @(Get-CodexStealthArguments -SupportedFeatures $cachedFeatMap -Tags @('backend'))
+    $filteredImgGen = @(Get-CodexStealthArguments -SupportedFeatures $cachedFeatMap -Tags @('image_gen'))
+    $ps1ShimSkipped = Get-CodexSupportedFeatures -Executable $fakeCodexPath -Paths $fcPaths
+    Assert-Test 'Get-CodexSupportedFeatures cache filters unsupported stealth flags and exempts image_generation for image_gen tag' (
+        $null -eq $ps1ShimSkipped -and
+        $null -ne $cachedFeatMap -and
+        $cachedFeatMap.ContainsKey('plugins') -and
+        ($filteredDefault -notcontains 'skip_host_skill_discovery') -and
+        ($filteredDefault -notcontains 'suppress_unstable_features_warning=true') -and
+        ($filteredDefault -contains 'plugins') -and
+        ($filteredDefault -contains 'apps') -and
+        ($filteredDefault -contains 'image_generation') -and
+        ($filteredImgGen -notcontains 'image_generation') -and
+        ($filteredImgGen -contains 'plugins')
     )
 }
 catch {

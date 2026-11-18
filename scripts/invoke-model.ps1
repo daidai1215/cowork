@@ -161,6 +161,7 @@ $replanRequired = $false
 $replanDetail = $null
 $codexShellEnabled = $false
 $codexFastConfig = $false
+$codexStealthTrimmed = $false
 $codexEphemeral = $false
 $agyDirectExe = $false
 $agySlashCommandsDisabled = $false
@@ -532,6 +533,14 @@ try {
             foreach ($cfgArg in @($codexCfgOverrides.config_args)) {
                 [void]$arguments.Add([string]$cfgArg)
             }
+            $supportedCodexFeatures = if ($DryRun) { $null } else {
+                Get-CodexSupportedFeatures -Executable $executable -Paths $paths -NoStateCache:$adHoc
+            }
+            $stealthArgs = @(Get-CodexStealthArguments -SupportedFeatures $supportedCodexFeatures -Tags $Tags)
+            foreach ($sArg in $stealthArgs) {
+                [void]$arguments.Add([string]$sArg)
+            }
+            $codexStealthTrimmed = ($stealthArgs.Count -gt 0)
         }
         if ($codexEphemeral) {
             [void]$arguments.Add('--ephemeral')
@@ -669,6 +678,7 @@ try {
             connect_timeout_sec = $effectiveConnectTimeout
             codex_shell_enabled = $codexShellEnabled
             codex_fast_config = $codexFastConfig
+            codex_stealth_trimmed = [bool]$codexStealthTrimmed
             codex_ephemeral = $codexEphemeral
             agy_direct_exe = $agyDirectExe
             agy_slash_commands_disabled = $agySlashCommandsDisabled
@@ -1339,27 +1349,43 @@ if (-not $DryRun -and $null -ne $paths -and $null -ne $modelObject) {
 if (
     $AutoRecordOk -and -not $DryRun -and -not $adHoc -and
     $exitCode -eq 0 -and -not $replanRequired -and
-    $null -ne $paths
+    $null -ne $paths -and $null -ne $modelObject
 ) {
-    $recordScript = Join-Path $PSScriptRoot 'record-outcome.ps1'
-    if ([IO.File]::Exists($recordScript)) {
+    $autoModelStatus = [string](Get-OrchestraProperty $modelObject 'status' '')
+    if ($autoModelStatus -ne 'candidate') {
         try {
-            $psHostExe = Join-Path $PSHOME 'powershell.exe'
-            if (-not [IO.File]::Exists($psHostExe)) { $psHostExe = Join-Path $PSHOME 'pwsh.exe' }
-            if (-not [IO.File]::Exists($psHostExe)) { $psHostExe = 'powershell.exe' }
-            $recExec = Invoke-OrchestraProcess -FilePath $psHostExe -Arguments @(
-                '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-                '-File', $recordScript,
-                '-InvocationId', $invocationId,
-                '-Outcome', 'ok',
-                '-RegistryPath', $paths.Registry,
-                '-StateDir', $paths.StateDir
-            ) -WorkDir $WorkDir -TimeoutSec 20 -CaptureStdout
-            if (-not $recExec.timeout -and $recExec.exit_code -eq 0) {
-                $outcomeRecorded = 'ok'
+            Add-UsageEvent -Paths $paths -Event @{
+                type = 'outcome'
+                invocation_id = $invocationId
+                ts = (Get-OrchestraNow).ToString('o')
+                outcome = 'ok'
+                note = ''
             }
+            $outcomeRecorded = 'ok'
         }
         catch {}
+    }
+    else {
+        $recordScript = Join-Path $PSScriptRoot 'record-outcome.ps1'
+        if ([IO.File]::Exists($recordScript)) {
+            try {
+                $psHostExe = Join-Path $PSHOME 'powershell.exe'
+                if (-not [IO.File]::Exists($psHostExe)) { $psHostExe = Join-Path $PSHOME 'pwsh.exe' }
+                if (-not [IO.File]::Exists($psHostExe)) { $psHostExe = 'powershell.exe' }
+                $recExec = Invoke-OrchestraProcess -FilePath $psHostExe -Arguments @(
+                    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+                    '-File', $recordScript,
+                    '-InvocationId', $invocationId,
+                    '-Outcome', 'ok',
+                    '-RegistryPath', $paths.Registry,
+                    '-StateDir', $paths.StateDir
+                ) -WorkDir $WorkDir -TimeoutSec 20 -CaptureStdout
+                if (-not $recExec.timeout -and $recExec.exit_code -eq 0) {
+                    $outcomeRecorded = 'ok'
+                }
+            }
+            catch {}
+        }
     }
 }
 $finalStatusTargets = @(
@@ -1415,6 +1441,7 @@ $finalResult = @{
     proxy = $reportedProxyUrl
     codex_shell_enabled = [bool]$codexShellEnabled
     codex_fast_config = [bool]$codexFastConfig
+    codex_stealth_trimmed = [bool]($codexStealthTrimmed -and ($exitCode -eq 0 -or $capture.events_count -gt 0))
     codex_ephemeral = [bool]$codexEphemeral
     agy_direct_exe = [bool]$agyDirectExe
     agy_slash_commands_disabled = [bool]$agySlashCommandsDisabled

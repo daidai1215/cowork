@@ -1,5 +1,11 @@
 # Cowork changelog
 
+## 2026-11-18T17:15:00.0000000Z - Concise English registry & ~80% doc/rule compression, zero-relay Swarm, Codex stealth-feature trim, and in-process `-AutoRecordOk`
+- registry_rev: 12 -> 13
+- compressed all `models.json` narrative strings (`hard_rules[].note`, `strengths`, `weaknesses`, `evidence[].claim`) into concise English (~80% overall doc/rule bloat reduction) while keeping every score, ID, alias, `primary_disabled`, and `policy` invariant identical
+- enabled zero-relay Swarm (host calls `gpt-6.2-astra` / `claude-opus-5-5` directly, no `gatekeeper`), Codex stealth-feature trimming (`skip_host_skill_discovery`, `omit_skill_descriptions`, 22 disabled desktop/plugin features; `45.6K -> 14.2K` tokens & `42.4s -> 17.2s`), and in-process `-AutoRecordOk` fast path
+- backup: registry/history/models-20261119-011200-12-pre13.json
+
 ## 2026-11-18T14:32:00.0000000Z - CLI cold-boot slimming (Codex pure-brain `--ignore-user-config --ignore-rules` & `--ephemeral`, direct `agy.exe --disable-slash-commands`) and `4H medium` ultra-fast tier
 - registry_rev: 11 -> 12
 - added `policy.ultra_fast_tags: ["scan"]` routing pure `scan` workhorse tasks to `medium` (`gemini-4-hydrogen-medium`), while `bulk`/`boilerplate`/`test_gen` stay `high` and general tasks stay `xhigh`

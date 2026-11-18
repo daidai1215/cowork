@@ -240,7 +240,7 @@
                                              ],
                            "primary_requires_tool":  "image_gen",
                            "locked":  true,
-                           "note":  "生图只交给具备 image_gen 工具的模型（当前仅 Codex 通道的 GPT-6.2 Astra）"
+                           "note":  "Route image generation exclusively to models with image_gen (currently GPT-6.2 Astra on Codex)."
                        },
                        {
                            "id":  "frontend-aesthetic-gate",
@@ -253,7 +253,7 @@
                            "reviewer":  "best-aesthetic",
                            "exclude_reviewer_from_primary":  true,
                            "locked":  true,
-                           "note":  "Opus 只审截图/diff 与 design tokens，不写长代码；Opus 不可用时由 Gemini 4 Carbon 按设计检查清单审",
+                           "note":  "Opus reviews screenshots, diffs, and design tokens only (never primary drafts); falls back to Gemini 4 Carbon when Opus is unavailable.",
                            "reviewer_fallback":  "gemini-4-carbon"
                        },
                        {
@@ -267,7 +267,7 @@
                                              ],
                            "reviewer":  "best-rigor",
                            "locked":  false,
-                           "note":  "数学/后端正确性审查交给最严谨的模型；若它本身就是 primary，则改由次优且不同厂商的模型审查"
+                           "note":  "Route math/backend rigor review to the top rigor model, or the next best cross-vendor model when it is already primary."
                        },
                        {
                            "id":  "final-prose-polish",
@@ -280,7 +280,7 @@
                                              ],
                            "polisher":  "best-prose",
                            "locked":  true,
-                           "note":  "最终文字润色交给文笔最好的模型（Gemini 4 Carbon）；拒绝防御性写作"
+                           "note":  "Route final prose polish to the top prose model (Gemini 4 Carbon); reject defensive hedging."
                        }
                    ],
     "modes":  {
@@ -530,22 +530,22 @@
                                                     }
                                 },
                        "strengths":  [
-                                         "OpenAI 能力天花板：代码严谨性、后端工程、极难多步数学与形式推导",
-                                         "生图最强（Codex 内置 image_gen，三家中唯一）",
-                                         "Codex 专属生态：Office 原生文档 / PPT / LaTeX / 浏览器与桌面操作",
-                                         "结构化输出与契约遵循极稳"
+                                         "OpenAI ceiling in code rigor, backend engineering, and hard multi-step formal math",
+                                         "Best image generation (only provider with built-in Codex image_gen)",
+                                         "Codex native ecosystem: Office docs, PPT, LaTeX, browser, and computer_use",
+                                         "Highly reliable structured outputs and contract adherence"
                                      ],
                        "weaknesses":  [
-                                          "单账号额度较少，依赖 Cockpit 自动切换账号，切换瞬间可能打断在途流或使旧会话加密推理状态失效",
-                                          "三家中最慢",
-                                          "防御性写作倾向（叠甲、免责前提、‘并非 X 而是 Y’套话），不宜直接定稿长文",
-                                          "前端视觉品味不如 Opus 5.5"
+                                          "Limited single-account quota relying on Cockpit auto-rotation (rotation can interrupt streams or invalidate encrypted reasoning state)",
+                                          "Slowest latency among active providers",
+                                          "Defensive hedging style ('not X, rather Y' disclaimers); avoid direct long-form finalization",
+                                          "Frontend visual taste trails Opus 5.5"
                                       ],
                        "last_researched":  "2026-11-10",
                        "evidence":  [
                                         {
                                             "url":  "user",
-                                            "claim":  "用户指令（2026-11-10）：当前 Codex 端只用 GPT-6 Astra (high)；单账号额度较少，由 Cockpit 自动切换账号；生图、代码严谨性、后端、数学最好；速度最慢",
+                                            "claim":  "User directive (2026-11-10): Codex uses GPT-6 Astra (high) with Cockpit rotation; strongest in image_gen, code rigor, backend, and math; slowest.",
                                             "date":  "2026-11-10"
                                         }
                                     ],
@@ -650,20 +650,20 @@
                                                     }
                                 },
                        "strengths":  [
-                                         "审美最好，尤其前端 UI / 落地页 / 视觉层级与细节质感",
-                                         "AA Coding Agent Index 全球第 1（62 分），多文件自主重构与架构品味极佳",
-                                         "指令理解细腻"
+                                         "Top aesthetic judgment for frontend UI, landing pages, visual hierarchy, and finish",
+                                         "AA Coding Agent Index #1 (62) with strong multi-file refactoring and architectural taste",
+                                         "Nuanced instruction comprehension"
                                      ],
                        "weaknesses":  [
-                                          "单池额度最稀缺，必须惜用（只做决策拍板、审美把关与精简终裁，不铺写大段初稿）",
-                                          "速度居中（慢于 Gemini 4 Carbon / Hydrogen，快于 GPT-6.2 Astra）",
-                                          "不能原生生图"
+                                          "Scarcest shared quota pool; conserve strictly for aesthetic gates, key decisions, and <=800w arbitration (never long primary drafts)",
+                                          "Medium latency (slower than Gemini 4 Carbon/Hydrogen, faster than GPT-6.2 Astra)",
+                                          "No native image generation"
                                       ],
                        "last_researched":  "2026-11-10",
                        "evidence":  [
                                         {
                                             "url":  "user",
-                                            "claim":  "用户指令（2026-11-10）：当前使用 Claude Opus 5.5 (high)；审美最好，特别是前端审美；额度最少；速度居中",
+                                            "claim":  "User directive (2026-11-10): Claude Opus 5.5 (high) has top frontend aesthetics, scarcest quota, and medium speed.",
                                             "date":  "2026-11-10"
                                         }
                                     ],
@@ -711,7 +711,7 @@
                                                        "confidence":  0.7,
                                                        "evidence":  [
                                                                         {
-                                                                            "claim":  "CWE-bench 漏洞修复 71.0%、SEC-bench Pro 88.2%、SWE-sweep 9.6%（较 Argon 翻倍以上），AA Coding Agent Index 59 分（全球第 2）。",
+                                                                            "claim":  "CWE-bench 71.0%, SEC-bench Pro 88.2%, SWE-sweep 9.6% (>2x Argon); AA Coding Agent Index 59 (#2 globally).",
                                                                             "date":  "2026-10-28",
                                                                             "url":  "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-carbon/"
                                                                         }
@@ -725,7 +725,7 @@
                                                     "confidence":  0.7,
                                                     "evidence":  [
                                                                      {
-                                                                         "claim":  "专为长周期工程与网络安全设计，Terminal-Bench 4.0 达 65.2%（作弊率 0.0%），CWE-bench 达 71.0%。",
+                                                                         "claim":  "Built for long-horizon engineering and security: Terminal-Bench 4.0 65.2% (0.0% cheating), CWE-bench 71.0%.",
                                                                          "date":  "2026-10-28",
                                                                          "url":  "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-carbon/"
                                                                      }
@@ -739,7 +739,7 @@
                                                  "confidence":  0.6,
                                                  "evidence":  [
                                                                   {
-                                                                      "claim":  "AA Intelligence Index v5.0 综合第 1（59 分），HLE-Diamond 69.1% 第 1。",
+                                                                      "claim":  "AA Intelligence Index v5.0 #1 (59), HLE-Diamond 69.1% (#1).",
                                                                       "date":  "2026-10-28",
                                                                       "url":  "https://artificialanalysis.ai/articles/gemini-4-carbon-new-number-1"
                                                                   }
@@ -753,7 +753,7 @@
                                                       "confidence":  0.8,
                                                       "evidence":  [
                                                                        {
-                                                                           "claim":  "不支持原生图像生成，生图统一走 Codex 通道的 GPT-6 Astra。",
+                                                                           "claim":  "No native image generation; delegate image tasks to Codex GPT-6.2 Astra.",
                                                                            "date":  "2026-10-28",
                                                                            "url":  "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-carbon/"
                                                                        }
@@ -767,7 +767,7 @@
                                                                "confidence":  0.7,
                                                                "evidence":  [
                                                                                 {
-                                                                                    "claim":  "LMArena WebDev Arena 1768 Elo（较 Argon +89 Elo，全球第 4），适合快速起草前端后交 Opus 审美把关。",
+                                                                                    "claim":  "LMArena WebDev Arena 1768 Elo (+89 vs Argon, #4 globally); strong frontend drafts before Opus aesthetic gate.",
                                                                                     "date":  "2026-10-28",
                                                                                     "url":  "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-carbon/"
                                                                                 }
@@ -781,7 +781,7 @@
                                                   "confidence":  0.8,
                                                   "evidence":  [
                                                                    {
-                                                                       "claim":  "用户判断：Gemini 文笔最好；LMArena Text Arena 盲测总榜第 1（约 1528 Elo）。",
+                                                                       "claim":  "User rating: top prose quality; LMArena Text Arena #1 (~1528 Elo).",
                                                                        "date":  "2026-11-10",
                                                                        "url":  "user"
                                                                    }
@@ -795,7 +795,7 @@
                                                             "confidence":  0.8,
                                                             "evidence":  [
                                                                              {
-                                                                                 "claim":  "用户判断：Gemini 世界知识很好；AA-Omniscience（54 分）与 HLE-Diamond（69.1%）双第 1，但 AA 幻觉率 11%，涉及事实须走 Truth Gate。",
+                                                                                 "claim":  "User rating: top world knowledge; AA-Omniscience (54) and HLE-Diamond (69.1%) #1, but 11% AA hallucination rate requires Truth Gate on facts.",
                                                                                  "date":  "2026-11-10",
                                                                                  "url":  "https://artificialanalysis.ai/articles/gemini-4-carbon-new-number-1"
                                                                              }
@@ -809,7 +809,7 @@
                                                          "confidence":  0.8,
                                                          "evidence":  [
                                                                           {
-                                                                              "claim":  "支持 100 万（1M）token 上下文窗口，GraphWalks BFS（256K–1M）取得 96.2% F1。",
+                                                                              "claim":  "1M token context window; GraphWalks BFS (256K-1M) 96.2% F1.",
                                                                               "date":  "2026-10-28",
                                                                               "url":  "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-carbon/"
                                                                           }
@@ -823,7 +823,7 @@
                                                            "confidence":  0.8,
                                                            "evidence":  [
                                                                             {
-                                                                                "claim":  "AA Coding Agent Index 59 分（全球第 2，仅次于 Opus 5.5 的 62 分），Terminal-Bench 4.0 达 65.2%。",
+                                                                                "claim":  "AA Coding Agent Index 59 (#2 after Opus 5.5 at 62); Terminal-Bench 4.0 65.2%.",
                                                                                 "date":  "2026-10-28",
                                                                                 "url":  "https://artificialanalysis.ai/articles/gemini-4-carbon-new-number-1"
                                                                             }
@@ -837,7 +837,7 @@
                                                         "confidence":  0.6,
                                                         "evidence":  [
                                                                          {
-                                                                             "claim":  "无 Codex 专属的本地 Office/PPT 原生生成插件工具链。",
+                                                                             "claim":  "Lacks Codex-native local Office/PPT plugin toolchain.",
                                                                              "date":  "2026-10-28",
                                                                              "url":  "user"
                                                                          }
@@ -845,27 +845,27 @@
                                                     }
                                 },
                        "strengths":  [
-                                         "文笔最好、自然去 AI 腔，LMArena 文本总榜第 1",
-                                         "世界知识与联网检索综述最强（AA Intelligence Index v5 60 分、Omniscience 第 1、HLE 69.1%）",
-                                         "1M 超长上下文（整仓深读、长文档图推理极强）",
-                                         "快速模式下专守论文/长文/深度定稿与数学/算法复核等少数高要求关口，日常负载可无缝下放 4H Extra"
+                                         "Best natural prose without AI filler; LMArena Text Arena #1",
+                                         "Top world knowledge and synthesis (AA Intelligence Index v5 60, Omniscience #1, HLE 69.1%)",
+                                         "1M context window for deep whole-repo reading and long-document graph reasoning",
+                                         "In fast modes, focuses on high-bar papers/prose/architecture and math/algorithm verification while offloading routine loads to 4H Extra"
                                      ],
                        "weaknesses":  [
-                                          "AA 实测幻觉率约 11%，涉及文献、具体数值与 API 事实时必须经过 Truth Gate 双查",
-                                          "极限形式数学与底层后端严谨性略逊于 GPT-6.2 Astra；响应慢于 4H Extra",
-                                          "前端视觉品味虽强（WebDev 第 4），仍次于 Opus 5.5",
-                                          "不支持原生图像生成，无 Codex 专属本地 Office 插件链"
+                                          "~11% AA hallucination rate; verify citations, exact numbers, and API signatures via Truth Gate",
+                                          "Formal math and backend edge-case rigor trail GPT-6.2 Astra; slower than 4H Extra",
+                                          "Strong frontend taste (WebDev #4) but trails Opus 5.5",
+                                          "No native image_gen or Codex local Office plugin chain"
                                       ],
                        "last_researched":  "2026-11-10",
                        "evidence":  [
                                         {
                                             "url":  "user",
-                                            "claim":  "用户指令（2026-11-10）：Gemini 4 Carbon 已正式启用，当前固定只用 gpt-6-astra high、claude-opus-5-5 high、gemini-4-carbon high",
+                                            "claim":  "User directive (2026-11-10): Gemini 4 Carbon enabled as active Google flagship.",
                                             "date":  "2026-11-10"
                                         },
                                         {
                                             "url":  "https://artificialanalysis.ai/articles/gemini-4-carbon-new-number-1",
-                                            "claim":  "AA Intelligence Index v5 第 1（59 分），Coding Agent Index 第 2（59 分），Omniscience 第 1（54 分），幻觉率 11%",
+                                            "claim":  "AA Intelligence Index v5 #1 (59), Coding Agent Index #2 (59), Omniscience #1 (54), 11% hallucination rate.",
                                             "date":  "2026-10-28"
                                         }
                                     ],
@@ -929,7 +929,7 @@
                                                        "evidence":  [
                                                                         {
                                                                             "url":  "https://artificialanalysis.ai",
-                                                                            "claim":  "GPT-6 Astra 直接继任旗舰，代码严谨性与核心后端能力居 OpenAI 系榜首；但 AA Coding Agent Index 与 GPT-6 Astra 基本持平。",
+                                                                            "claim":  "Direct flagship successor to GPT-6 Astra; leads OpenAI in code rigor and core backend engineering (AA Coding Agent Index on par with 6 Astra).",
                                                                             "date":  "2026-11-18"
                                                                         }
                                                                     ]
@@ -943,7 +943,7 @@
                                                     "evidence":  [
                                                                      {
                                                                          "url":  "https://openai.com",
-                                                                         "claim":  "2026-11-17 正式发布；高难度科研与工程工作流 Terminal-Bench-Science 领先，后端工程与不变量控制延续 6 Astra 天花板。",
+                                                                         "claim":  "Released 2026-11-17; leads Terminal-Bench-Science for hard engineering workflows while preserving 6 Astra backend/invariant rigor.",
                                                                          "date":  "2026-11-18"
                                                                      }
                                                                  ]
@@ -957,7 +957,7 @@
                                                  "evidence":  [
                                                                   {
                                                                       "url":  "https://openai.com",
-                                                                      "claim":  "GPQA Diamond（无工具）97%（超越 6 Astra 的 96%），AA Intelligence Index 62 分（全球第 2，较 6 Astra 提升 5 分），CritPt v2 与科研数学领跑。",
+                                                                      "claim":  "GPQA Diamond (no tools) 97% (vs 6 Astra 96%), AA Intelligence Index 62 (#2 globally, +5 vs 6 Astra); leads CritPt v2 and research math.",
                                                                       "date":  "2026-11-18"
                                                                   }
                                                               ]
@@ -971,7 +971,7 @@
                                                       "evidence":  [
                                                                        {
                                                                            "url":  "user",
-                                                                           "claim":  "Codex 通道唯一内置原生 image_gen 工具链。",
+                                                                           "claim":  "Only model with built-in native image_gen toolchain on Codex.",
                                                                            "date":  "2026-11-18"
                                                                        }
                                                                    ]
@@ -985,7 +985,7 @@
                                                                "evidence":  [
                                                                                 {
                                                                                     "url":  "https://artificialanalysis.ai",
-                                                                                    "claim":  "OpenAI 在 6.2 中加强前端与 3D 渲染表现（AA-3D 领跑），但整体 UI 审美仍次于 Opus 5.5 与 Carbon。",
+                                                                                    "claim":  "Improved frontend and 3D rendering in 6.2 (leads AA-3D), though overall UI taste still trails Opus 5.5 and Carbon.",
                                                                                     "date":  "2026-11-18"
                                                                                 }
                                                                             ]
@@ -998,8 +998,8 @@
                                                   "confidence":  0.65,
                                                   "evidence":  [
                                                                    {
+                                                                       "claim":  "Improved prose de-AI-fication and template adherence (up from 6 Astra's 6.0), though Gemini 4 Carbon remains best for literary and long-form writing.",
                                                                        "url":  "https://openai.com",
-                                                                       "claim":  "官方针对文风“去 AI 腔”与模板严格遵循优化（优于 6 Astra 的 6.0），但自然文学与长文表达仍以 Gemini 4 Carbon 为最佳。",
                                                                        "date":  "2026-11-18"
                                                                    }
                                                                ]
@@ -1013,7 +1013,7 @@
                                                             "evidence":  [
                                                                              {
                                                                                  "url":  "https://artificialanalysis.ai",
-                                                                                 "claim":  "科学推理登顶（GPQA 97%），但 AA Omniscience 实测无依据猜测/幻觉率从 50% 升至 59%（最大推理档），事实与文献引用必须严过 Truth Gate。",
+                                                                                 "claim":  "Top scientific reasoning (GPQA 97%), but AA Omniscience unsupported-guess/hallucination rate rose from 50% to 59% (max effort); strict Truth Gate required on facts and citations.",
                                                                                  "date":  "2026-11-18"
                                                                              }
                                                                          ]
@@ -1027,7 +1027,7 @@
                                                          "evidence":  [
                                                                           {
                                                                               "url":  "https://artificialanalysis.ai",
-                                                                              "claim":  "扩展至 1M 上下文窗口，缓存输入单价降至 $0.40/M（降幅 60%），适合长程代理与大文档对照分析。",
+                                                                              "claim":  "Expanded to 1M context window with cached input price cut 60% to $0.40/M, fitting long-horizon agents and multi-doc analysis.",
                                                                               "date":  "2026-11-18"
                                                                           }
                                                                       ]
@@ -1041,7 +1041,7 @@
                                                            "evidence":  [
                                                                             {
                                                                                 "url":  "https://tbench.ai",
-                                                                                "claim":  "Codex 最高档 Terminal-Bench 4.0 达 62.1%，Terminal-Bench-Science 领先，整体 Coding Agent 指数与 6 Astra 持平。",
+                                                                                "claim":  "Codex top tier Terminal-Bench 4.0 62.1%; leads Terminal-Bench-Science with overall Coding Agent index matching 6 Astra.",
                                                                                 "date":  "2026-11-18"
                                                                             }
                                                                         ]
@@ -1055,32 +1055,32 @@
                                                         "evidence":  [
                                                                          {
                                                                              "url":  "https://openai.com",
-                                                                             "claim":  "支持 Codex 原生 PPT/Word/Excel/LaTeX 工具链，6.2 版进一步强化长模板与专业文书格式还原。",
+                                                                             "claim":  "Supports Codex native PPT/Word/Excel/LaTeX toolchain with stronger long-template and professional formatting fidelity in 6.2.",
                                                                              "date":  "2026-11-18"
                                                                          }
                                                                      ]
                                                     }
                                 },
                        "strengths":  [
-                                         "OpenAI 最新旗舰（2026-11-17）：AA Intelligence Index 62 分（全球第 2），GPQA 97%，科研与数学推导再创新高",
-                                         "扩展至 1M 上下文窗口且支持 $0.40/M 缓存定价，后端契约、极端边界与并发严谨性极强",
-                                         "生图最强（Codex 内置 image_gen）与 Office/PPT/LaTeX 生态完备"
+                                         "OpenAI latest flagship (2026-11-17): AA Intelligence Index 62 (#2), GPQA 97%, top scientific and mathematical reasoning",
+                                         "1M context window with $0.40/M cached input pricing; top rigor on backend contracts, edge cases, and concurrency",
+                                         "Best image_gen (Codex built-in) and full Office/PPT/LaTeX ecosystem"
                                      ],
                        "weaknesses":  [
-                                          "AA Omniscience 事实幻觉率从 50% 升至 59%，涉及文献引用、API 签名与客观数值时绝不可跳过 Truth Gate",
-                                          "AA Coding Agent Index 相比 6 Astra 未拉大代差；前端 UI 审美仍不如 Opus 5.5",
-                                          "单账号额度依赖 Cockpit 自动切号，四家中响应最慢，日常批量分片编码推荐配合 4H Extra"
+                                          "AA Omniscience hallucination rate rose from 50% to 59%; never skip Truth Gate on citations, API signatures, or numeric facts",
+                                          "No large Coding Agent jump over 6 Astra; frontend UI taste trails Opus 5.5",
+                                          "Per-account quota relies on Cockpit auto-rotation and is slowest of all 4 models; pair with 4H Extra for parallel bulk shards"
                                       ],
                        "last_researched":  "2026-11-18",
                        "evidence":  [
                                         {
                                             "url":  "user",
-                                            "claim":  "用户指令（2026-11-18）：GPT-6.2 Astra 已更新，全面替换 GPT-6 Astra。",
+                                            "claim":  "User directive (2026-11-18): GPT-6.2 Astra upgraded to fully replace GPT-6 Astra.",
                                             "date":  "2026-11-18"
                                         },
                                         {
                                             "url":  "https://artificialanalysis.ai",
-                                            "claim":  "AA Intelligence Index 62 (#2)，GPQA 97%，Terminal-Bench 4.0 62.1%，Omniscience 幻觉率 59%。",
+                                            "claim":  "AA Intelligence Index 62 (#2), GPQA 97%, Terminal-Bench 4.0 62.1%, Omniscience hallucination rate 59%.",
                                             "date":  "2026-11-18"
                                         }
                                     ]
@@ -1130,7 +1130,7 @@
                                                        "evidence":  [
                                                                         {
                                                                             "url":  "https://blog.google",
-                                                                            "claim":  "2026-11-12 发布，工具调用与 API 幻觉率较 Flash 3.8 显著降低，日常代码严谨度略低于 Carbon（8.5）。",
+                                                                            "claim":  "Released 2026-11-12; much lower tool-call and API hallucination than Flash 3.8, though daily code rigor trails Carbon (8.5).",
                                                                             "date":  "2026-11-18"
                                                                         }
                                                                     ]
@@ -1144,7 +1144,7 @@
                                                     "evidence":  [
                                                                      {
                                                                          "url":  "https://blog.google",
-                                                                         "claim":  "Terminal-Bench 4.1 达 57.0%（作弊修正后，超 3.8 Flash 逾三倍），胜任日常后端迭代与验证。",
+                                                                         "claim":  "Terminal-Bench 4.1 57.0% (post-anti-cheat, >3x Flash 3.8); solid for daily backend iteration and verification.",
                                                                          "date":  "2026-11-18"
                                                                      }
                                                                  ]
@@ -1158,7 +1158,7 @@
                                                  "evidence":  [
                                                                   {
                                                                       "url":  "https://blog.google",
-                                                                      "claim":  "支持 Gemini 4 系列独有的 xhigh（4H Extra）深思档：AA Intelligence Index 从 high 的 51 分提升至 xhigh 的 54 分。",
+                                                                      "claim":  "Supports Gemini 4 exclusive xhigh (4H Extra) tier: AA Intelligence Index rises from 51 (high) to 54 (xhigh).",
                                                                       "date":  "2026-11-18"
                                                                   }
                                                               ]
@@ -1172,7 +1172,7 @@
                                                       "evidence":  [
                                                                        {
                                                                            "url":  "https://blog.google",
-                                                                           "claim":  "不支持原生图像生成，生图统一交 Codex 通道的 GPT-6.2 Astra。",
+                                                                           "claim":  "No native image generation; delegate image tasks to Codex GPT-6.2 Astra.",
                                                                            "date":  "2026-11-18"
                                                                        }
                                                                    ]
@@ -1186,7 +1186,7 @@
                                                                "evidence":  [
                                                                                 {
                                                                                     "url":  "https://blog.google",
-                                                                                    "claim":  "LMArena WebDev 与交互界面快速原型能力突出，配合 Opus 5.5 Aesthetic Gate 即可达到顶级视觉水准。",
+                                                                                    "claim":  "Strong rapid UI prototyping on LMArena WebDev; reaches top visual polish with Opus 5.5 Aesthetic Gate.",
                                                                                     "date":  "2026-11-18"
                                                                                 }
                                                                             ]
@@ -1200,7 +1200,7 @@
                                                   "evidence":  [
                                                                    {
                                                                        "url":  "https://deepmind.google",
-                                                                       "claim":  "清晰结构化表达优良，侧重快速执行与工程文档；高要求论文/深度文稿与定稿润色仍交 Carbon（10 分）。",
+                                                                       "claim":  "Clear structured prose suited for fast execution and engineering docs; route high-bar papers and polish to Carbon (10).",
                                                                        "date":  "2026-11-18"
                                                                    }
                                                                ]
@@ -1214,7 +1214,7 @@
                                                             "evidence":  [
                                                                              {
                                                                                  "url":  "https://blog.google",
-                                                                                 "claim":  "4H Extra（xhigh）AA Intelligence Index 达 54 分（超过 Argon 的 50 分），但极高知识密度仍不及 Carbon（60 分 / HLE #1）。",
+                                                                                 "claim":  "4H Extra (xhigh) reaches AA Intelligence Index 54 (above Argon's 50), though deepest knowledge density trails Carbon (60 / HLE #1).",
                                                                                  "date":  "2026-11-18"
                                                                              }
                                                                          ]
@@ -1228,7 +1228,7 @@
                                                          "evidence":  [
                                                                           {
                                                                               "url":  "https://blog.google",
-                                                                              "claim":  "统一 1M token 上下文窗口（$1.50/$7.50），约 2.5 倍吞吐速度极适合全仓预读、高速勘察与批量分片综述。",
+                                                                              "claim":  "Unified 1M token context ($1.50/$7.50) with ~2.5x throughput; ideal for whole-repo scans, recon, and sharded summaries.",
                                                                               "date":  "2026-11-18"
                                                                           }
                                                                       ]
@@ -1242,7 +1242,7 @@
                                                            "evidence":  [
                                                                             {
                                                                                 "url":  "https://deepmind.google",
-                                                                                "claim":  "Agents Last Exam v1.1 达 71.6%、AutomationBench-AA 76.1%、OSWorld-2.1 77.6%，高吞吐 Swarm 分片并发极强。",
+                                                                                "claim":  "Agents Last Exam v1.1 71.6%, AutomationBench-AA 76.1%, OSWorld-2.1 77.6%; excels at high-throughput Swarm shards.",
                                                                                 "date":  "2026-11-18"
                                                                             }
                                                                         ]
@@ -1256,31 +1256,31 @@
                                                         "evidence":  [
                                                                          {
                                                                              "url":  "user",
-                                                                             "claim":  "无 Codex 专属本地 Office 插件链。",
+                                                                             "claim":  "Lacks Codex-native local Office plugin toolchain.",
                                                                              "date":  "2026-11-18"
                                                                          }
                                                                      ]
                                                     }
                                 },
                        "strengths":  [
-                                         "速度极快（约 2.5 倍于重型旗舰）且支持 Gemini 4 独有的 xhigh（4H Extra）深思档（AA 54 分，超越 Argon）",
-                                         "1M 超长上下文 + 高并发高吞吐，Agents Last Exam 71.6%、AutomationBench 76.1%，Swarm 分片首选底座",
-                                         "工具调用与虚构 API 幻觉较 3.8 Flash 大幅下降；日常替代 Carbon 承担前端起草、仓扫综述与常规审查，疑难时自动升级 Carbon"
+                                         "~2.5x faster than heavy flagships with exclusive xhigh (4H Extra) tier (AA 54, surpassing Argon)",
+                                         "1M context + high concurrency (Agents Last Exam 71.6%, AutomationBench 76.1%); default Swarm shard workhorse",
+                                         "Much lower API/tool hallucination than Flash 3.8; handles routine UI drafts, repo scans, and checks with seamless Carbon escalation"
                                      ],
                        "weaknesses":  [
-                                          "极高文笔要求（论文/深度长文）与极深跨跳知识（HLE）天花板不及 Carbon，且 xhigh 档延迟与 token 开销明显高于 high",
-                                          "不支持原生生图与 Codex Office 插件；极限底层后端与数学严谨性交 GPT-6.2 Astra"
+                                          "High-bar prose (papers/essays) and deep multi-hop knowledge (HLE) trail Carbon; xhigh has higher latency/tokens than high/medium",
+                                          "No native image_gen or Codex Office plugins; route extreme backend/math rigor to GPT-6.2 Astra"
                                       ],
                        "last_researched":  "2026-11-18",
                        "evidence":  [
                                         {
                                             "url":  "user",
-                                            "claim":  "用户指令（2026-11-18）：在要求用 Gemini 4H Extra（xhigh）快速使用时，加入 4H 承担大部分原 Carbon 任务，仅少数高要求任务使用 Carbon。",
+                                            "claim":  "User directive (2026-11-18): Enable Gemini 4H Extra (xhigh) to absorb routine Carbon tasks while reserving Carbon for high-bar gates.",
                                             "date":  "2026-11-18"
                                         },
                                         {
                                             "url":  "https://blog.google",
-                                            "claim":  "2026-11-12 发布；xhigh AA Index 54 分，Terminal-Bench 4.1 57.0%，1M 上下文，2.5x 速度提升。",
+                                            "claim":  "Released 2026-11-12; xhigh AA Index 54, Terminal-Bench 4.1 57.0%, 1M context, 2.5x speed.",
                                             "date":  "2026-11-18"
                                         }
                                     ]
@@ -1294,6 +1294,6 @@
                     "best-knowledge":  "gemini-4-carbon",
                     "best-aesthetic":  "claude-opus-5-5"
                 },
-    "registry_rev":  12,
-    "updated":  "2026-11-18T14:32:00.0000000Z"
+    "registry_rev":  13,
+    "updated":  "2026-11-18T17:15:00.0000000Z"
 }
