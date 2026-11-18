@@ -382,6 +382,9 @@ if ($case -eq 'TEST_ZERO_USAGE') {
         total_tokens = 10
     }
 }
+if ($case -eq 'TEST_LARGE_INLINE') {
+    $result.response = ('L' * 65000)
+}
 if ($case -eq 'TEST_QUOTA') {
     $result.status = 'ERROR'
     $result.error = @{ code = 'insufficient_quota'; status = 429 }
@@ -1858,6 +1861,79 @@ exit 0
         $stgSw.ElapsedMilliseconds -ge 90 -and
         [IO.File]::Exists($staggerMetaFile) -and
         [IO.Directory]::GetFiles($staggerPaths.Slots, '*.json').Length -eq 0
+    )
+
+    # (i) Rev 11: Inline response when -OutFile omitted, >64000 spill to .response.md, and -AutoRecordOk single-step outcome logging
+    $rev11State = Join-Path $sandbox 'rev11-state'
+    $rev11Paths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir $rev11State
+    $rev11Home = Join-Path $sandbox 'rev11-codex-home'
+    [void][IO.Directory]::CreateDirectory($rev11Home)
+    [IO.File]::WriteAllBytes((Join-Path $rev11Home 'auth.json'), $script:OrchestraUtf8.GetBytes('{"fixture":"rev11"}'))
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME', $rev11Home)
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX', $fakeCodexPath)
+    [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_AGY_WRAPPER', $wrapperPath)
+
+    $explicitOutPath = Join-Path $sandbox 'rev11-explicit.txt'
+    $agyWithOutRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $rev11State,
+        '-WorkDir', $sandbox, '-Model', 'gemini-4-carbon',
+        '-Prompt', 'TEST_SUCCESS', '-OutFile', $explicitOutPath
+    )
+    $agyInlineRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $rev11State,
+        '-WorkDir', $sandbox, '-Model', 'gemini-4-carbon',
+        '-Prompt', 'TEST_SUCCESS'
+    )
+    $codexInlineRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $rev11State,
+        '-WorkDir', $sandbox, '-Model', 'gpt-6-astra',
+        '-Prompt', 'SUCCESS_TEXT'
+    )
+    $agyLargeRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $rev11State,
+        '-WorkDir', $sandbox, '-Model', 'gemini-4-carbon',
+        '-Prompt', 'TEST_LARGE_INLINE'
+    )
+    $spillFile = [string]$agyLargeRun.json.out_file
+    $spillExists = (-not [string]::IsNullOrWhiteSpace($spillFile)) -and [IO.File]::Exists($spillFile)
+    $spillBytes = if ($spillExists) { [IO.File]::ReadAllBytes($spillFile) } else { [byte[]]@() }
+    $spillText = if ($spillExists) { [IO.File]::ReadAllText($spillFile, $script:OrchestraUtf8) } else { '' }
+    Assert-Test 'Inline response returned when -OutFile omitted, suppressed when -OutFile passed, and >64000 spills to .response.md' (
+        $agyWithOutRun.code -eq 0 -and $null -eq $agyWithOutRun.json.response -and $agyWithOutRun.json.response_truncated -eq $false -and
+        $agyInlineRun.code -eq 0 -and $agyInlineRun.json.response -ceq 'Successful prose mentioning quota and 429.' -and $agyInlineRun.json.response_truncated -eq $false -and
+        $codexInlineRun.code -eq 0 -and $codexInlineRun.json.response -ceq 'quota 429 invalid_encrypted_content' -and $codexInlineRun.json.response_truncated -eq $false -and
+        $agyLargeRun.code -eq 0 -and $agyLargeRun.json.response_truncated -eq $true -and
+        $agyLargeRun.json.response.Length -eq 64000 -and
+        $spillFile -like '*.response.md' -and
+        $spillExists -and
+        ($spillBytes.Length -lt 3 -or -not ($spillBytes[0] -eq 239 -and $spillBytes[1] -eq 187 -and $spillBytes[2] -eq 191)) -and
+        $spillText.Length -eq 65000
+    )
+
+    $autoRecState = Join-Path $sandbox 'autorec-state'
+    $autoRecPaths = Get-OrchestraPaths -RegistryPath $fixtureRegistry -StateDir $autoRecState
+    $autoRecRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $autoRecState,
+        '-WorkDir', $sandbox, '-Model', 'gemini-4-carbon',
+        '-Prompt', 'TEST_SUCCESS', '-AutoRecordOk'
+    )
+    $autoRecFailRun = Invoke-TestScript -Script $invokeScript -Arguments @(
+        '-RegistryPath', $fixtureRegistry, '-StateDir', $autoRecState,
+        '-WorkDir', $sandbox, '-Model', 'gemini-4-carbon',
+        '-Prompt', 'TEST_AUTH', '-AutoRecordOk'
+    )
+    $autoRecEvents = @(Read-UsageEvents -Paths $autoRecPaths)
+    $autoRecOutcomes = @($autoRecEvents | Where-Object {
+        (Get-OrchestraProperty $_ 'type') -eq 'outcome' -and
+        (Get-OrchestraProperty $_ 'invocation_id') -eq $autoRecRun.json.invocation_id
+    })
+    Assert-Test '-AutoRecordOk records outcome=ok in usage.jsonl on exit 0 and skips failed runs' (
+        $autoRecRun.code -eq 0 -and
+        $autoRecRun.json.outcome_recorded -eq 'ok' -and
+        $autoRecOutcomes.Count -eq 1 -and
+        $autoRecOutcomes[0].outcome -eq 'ok' -and
+        $autoRecFailRun.code -eq 3 -and
+        $null -eq $autoRecFailRun.json.outcome_recorded
     )
 }
 catch {

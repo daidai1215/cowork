@@ -19,6 +19,7 @@ param(
     [int]$SlotWaitSec = 300,
     [switch]$NoSlotWait,
     [switch]$AllowCodexShell,
+    [switch]$AutoRecordOk,
     [string]$StatusFile,
     [switch]$DryRun,
     [string]$RegistryPath,
@@ -109,8 +110,13 @@ $liveStatusPath = $null
 $latestChannelStatusPath = $null
 $explicitStatusPath = $null
 $reportedStatusFile = $null
+$liveDir = $null
 $eventsLogPath = $null
 $eventsWriter = $null
+$hasExplicitOutFile = $false
+$inlineResponse = $null
+$responseTruncated = $false
+$outcomeRecorded = $null
 $poolName = $null
 $poolLimits = $null
 $slotLease = $null
@@ -331,6 +337,7 @@ try {
         }
         $outputPath = [IO.Path]::GetFullPath($outputPath)
     }
+    $hasExplicitOutFile = ($null -ne $outputPath)
     $schemaPath = $null
     if (-not [string]::IsNullOrWhiteSpace($JsonSchema)) {
         $schemaPath = $JsonSchema
@@ -1092,6 +1099,24 @@ try {
                 $replanRequired = $true
                 $replanDetail = $replanCheck.detail
             }
+            if (-not $hasExplicitOutFile) {
+                if ($inspectText.Length -gt 64000) {
+                    if ($null -ne $liveDir) {
+                        try {
+                            [void][IO.Directory]::CreateDirectory($liveDir)
+                            $spillPath = Join-Path $liveDir ($invocationId + '.response.md')
+                            [IO.File]::WriteAllText($spillPath, $inspectText, $script:OrchestraUtf8)
+                            $outputPath = $spillPath
+                        }
+                        catch {}
+                    }
+                    $inlineResponse = $inspectText.Substring(0, 64000)
+                    $responseTruncated = $true
+                }
+                else {
+                    $inlineResponse = $inspectText
+                }
+            }
         }
     }
 }
@@ -1172,6 +1197,33 @@ if (-not $DryRun -and $null -ne $paths -and $null -ne $modelObject) {
         [Console]::Error.WriteLine($errorMessage)
     }
 }
+if (
+    $AutoRecordOk -and -not $DryRun -and -not $adHoc -and
+    $exitCode -eq 0 -and -not $replanRequired -and
+    $null -ne $paths -and
+    -not [string]::IsNullOrWhiteSpace([string]$capture.session_id)
+) {
+    $recordScript = Join-Path $PSScriptRoot 'record-outcome.ps1'
+    if ([IO.File]::Exists($recordScript)) {
+        try {
+            $psHostExe = Join-Path $PSHOME 'powershell.exe'
+            if (-not [IO.File]::Exists($psHostExe)) { $psHostExe = Join-Path $PSHOME 'pwsh.exe' }
+            if (-not [IO.File]::Exists($psHostExe)) { $psHostExe = 'powershell.exe' }
+            $recExec = Invoke-OrchestraProcess -FilePath $psHostExe -Arguments @(
+                '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+                '-File', $recordScript,
+                '-SessionId', [string]$capture.session_id,
+                '-Outcome', 'ok',
+                '-RegistryPath', $paths.Registry,
+                '-StateDir', $paths.StateDir
+            ) -WorkDir $WorkDir -TimeoutSec 20 -CaptureStdout
+            if (-not $recExec.timeout -and $recExec.exit_code -eq 0) {
+                $outcomeRecorded = 'ok'
+            }
+        }
+        catch {}
+    }
+}
 $finalStatusTargets = @(
     foreach ($p in @($liveStatusPath, $latestChannelStatusPath, $explicitStatusPath)) {
         if (-not [string]::IsNullOrWhiteSpace([string]$p)) { [string]$p }
@@ -1230,6 +1282,9 @@ $finalResult = @{
     pool = $poolName
     slot_wait_sec = [double]$slotWaitedSec
     stagger_ms = [int]$slotStaggerMs
+    response = $inlineResponse
+    response_truncated = [bool]$responseTruncated
+    outcome_recorded = $outcomeRecorded
     usage = $usageSummary
 }
 foreach ($key in $dryData.Keys) { $finalResult[$key] = $dryData[$key] }

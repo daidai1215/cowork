@@ -409,7 +409,8 @@
                                                    "agy_anthropic":  3
                                                },
                    "launch_stagger_ms":  200,
-                   "codex_rotation_cooldown_sec":  15
+                   "codex_rotation_cooldown_sec":  15,
+                   "plan_external_min_unread_files":  5
                },
     "models":  [
                    {
@@ -1290,6 +1291,6 @@
                     "best-knowledge":  "gemini-4-carbon",
                     "best-aesthetic":  "claude-opus-5-5"
                 },
-    "registry_rev":  10,
-    "updated":  "2026-11-18T12:55:00.0000000Z"
+    "registry_rev":  11,
+    "updated":  "2026-11-18T13:42:00.0000000Z"
 }

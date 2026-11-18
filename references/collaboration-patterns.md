@@ -11,8 +11,12 @@
 
 ## 0. 通用铁律（所有模式都适用）
 
-1. **规划期双开 + 三档主控感知路由 + Antigravity 多池隔离**
-   - **Orchestrator 规划期默认双开（`/swarm` + `/cowork`）**：当主控处于 `Orchestrator (Carbon)` 或 `Orchestrator (Argon)` 时，**即便在只读规划 / 勘察 / 架构拆解阶段，也默认开启 `/swarm`（`native_swarm`）并行派出只读 `4H` 勘察员，并经 `/cowork` 异步咨询 `GPT-6.2 Astra`**，加速立项、彻底避免单线程 Carbon 慢速阻塞；创建 Worker 时必须显式指定模型：**编码/勘察/测试工指定 `model: "gemini-4-hydrogen-xhigh"`，监控与机械扫描工指定 `model: "gemini-4-hydrogen-high"`**，严禁直接继承 `Orchestrator` 双跳税。
+1. **Fast-Plan 免空转 + 执行期双开 + 三档主控感知路由 + Antigravity 多池隔离**
+   - **Orchestrator 极速立项（Fast-Plan Gate）与执行期双开（`/swarm` + `/cowork`）**：
+     - **执行期默认双开**：非纯问答的执行任务在 `exit_plan_mode` 之后由高速执行器默认开启 `/swarm`（`native_swarm`，编码/勘察/测试工显式指定 `model: "gemini-4-hydrogen-xhigh"`，监控与机械扫描工指定 `model: "gemini-4-hydrogen-high"`，严禁继承 `Orchestrator` 双跳税）与 `/cowork`；
+     - **Plan Mode 免空转门禁（`policy.plan_external_min_unread_files = 5`，硬限 `<= 1` 轮工具往返）**：
+       - **豁免直出（0 外调）**：当所需材料/大纲已在当前上下文内，或需新读本地文件 `< 5` 个（如方案重组、局部修改、追问微调）时，**严禁在规划回合拉起 `/swarm` 或外调 `GPT-6.2 Astra`**！Carbon 单轮直出计划或立即 `exit_plan_mode`；
+       - **未知大仓/硬核证明例外（`>= 5` 未读文件）**：最多仅允许 **1 轮**同步聚合外调——省略 `-OutFile` 直接读取返回 JSON 的 `.response`（`>64KB` 自动溢写 `.response.md` 并设 `response_truncated=true`），必加 `-AutoRecordOk` 一步完成 `outcome_recorded="ok"` 记账；**规划期严禁挂 `schedule 35s` 看门狗、严禁读取 `.events.jsonl`、严禁单独再跑一轮 `record-outcome.ps1`**。
    - **三档主控感知自动分层（`route.ps1 -HostModel orchestrator|carbon|hydrogen`）**：
      - `orchestrator_fast`（`-HostModel orchestrator`）：约 80%+ 原 Carbon 负载下放 `4H Extra`（`gemini-4-hydrogen`），Carbon 仅留守 `architecture`、`paper`/`essay`/`copywriting`、`math`/`algorithm` 复核与 `-AllowEscalation` 升级。
      - `carbon_peak`（`-HostModel carbon`）：Carbon 保留主力权限，仅将大量简单/机械任务（`bulk` / `boilerplate` / `scan` / `test_gen`，未传 `-AllowEscalation`）分流给 `4H` **`high`** 档提速，其余全归 Carbon。
@@ -158,7 +162,7 @@
 
 ## 8. Swarm + Cowork 联合协同协议（`/swarm` 下调用 Opus 5.5 与 GPT-6.2 Astra）
 
-在 Antigravity 开启 `/swarm`（`native_swarm`）后（Orchestrator 模式下即便在只读规划期也应默认双开 `/swarm` + `/cowork`）：
+在 Antigravity 开启 `/swarm`（`native_swarm`）后（Orchestrator 模式下于 `exit_plan_mode` 后的执行期默认双开 `/swarm` + `/cowork`；Plan Mode 严格遵循 Fast-Plan 门禁：`< 5` 未读文件 `0` 外调，`>= 5` 未读文件限 `1` 轮同步外调）：
 - **为什么必须通过 `cowork` 桥接**？
   1. 原生 `swarm{action:"add"}` 只能选择 Antigravity 通道模型（`Carbon / 4H Extra / Opus`），**无法直接拉起 Codex 通道的 `gpt-6.2-astra`**；
   2. `Opus 5.5` 独占稀缺 Claude 配额池，不应开一整池 `Opus 5.5` Worker 并行耗额度；而是仅在 UI Aesthetic Gate 或双方案难分高下时，通过 `cowork` 单次精简调用 `claude-opus-5-5`。

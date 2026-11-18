@@ -1,11 +1,11 @@
 # cowork
 
-多模型协同总调度 Skill（面向 **Antigravity (`agy`)**、**OpenAI Codex CLI (`codex`)** 与 **`/swarm` 多智能体编排**共享）。默认以**极致性能（`peak` 模式零额度扣分）**为第一目标，内置 **Orchestrator 规划期双开 `/swarm` + `/cowork` 全局插件（`cowork-orchestrator`）**、**三档主控感知自动分层（`-HostModel orchestrator|carbon|hydrogen` → `orchestrator_fast` / `carbon_peak` / `hydrogen_max`）**、**单点 Swarm `gatekeeper`** 以及 **Context & KV Prefix Cache 静态前缀锁定与静默事件流协议**。
+多模型协同总调度 Skill（面向 **Antigravity (`agy`)**、**OpenAI Codex CLI (`codex`)** 与 **`/swarm` 多智能体编排**共享）。默认以**极致性能（`peak` 模式零额度扣分）**为第一目标，内置 **Orchestrator Fast-Plan 免空转门禁（`<5` 未读文件 0 外调）与执行期双开 `/swarm` + `/cowork` 全局插件（`cowork-orchestrator`）**、**三档主控感知自动分层（`-HostModel orchestrator|carbon|hydrogen` → `orchestrator_fast` / `carbon_peak` / `hydrogen_max`）**、**单点 Swarm `gatekeeper`** 以及 **Context & KV Prefix Cache 静态前缀锁定与静默事件流协议**。
 
 ## 当前主力阵容（默认 `peak` 极致性能 / 三档主控感知分层）
 
 <!-- AUTO:ROSTER:START -->
-> 自动同步自 `registry/models.json` (`registry_rev: 10`, 活跃模型: 4)
+> 自动同步自 `registry/models.json` (`registry_rev: 11`, 活跃模型: 4)
 
 | 模型 | ID / 通道 | 默认档位 | 顶级长板（>=9） | 额度 (`quota_rank`) | 速度 (`speed_rank`) | 运行特性 |
 |---|---|---|---|---|---|---|
@@ -67,9 +67,9 @@ cowork/
 ├── integrations/
 │   └── cowork-orchestrator-plugin/   # 全局常驻 Antigravity 插件（setup.ps1 自动部署至 ~/.gemini/config/plugins/cowork-orchestrator/）
 │       ├── plugin.json
-│       └── rules/AGENTS.md           # 全对话生效：Orchestrator 规划期双开、三档 -HostModel、KV 缓存与多池 LPT/SDM/TDM 铁律（<=2.2 KB）
+│       └── rules/AGENTS.md           # 全对话生效：Orchestrator Fast-Plan 免空转/执行期双开、三档 -HostModel、KV 缓存与多池 LPT/SDM/TDM 铁律（<=2.2 KB）
 ├── registry/
-│   ├── models.json                   # 数据化模型档案（10 维能力分、锁定标记、别名、硬规则、三档主控与池并发配额）
+│   ├── models.json                   # 数据化模型档案（10 维能力分、锁定标记、别名、硬规则、三档主控、Fast-Plan 门槛与池并发配额）
 │   ├── research.schema.json          # 新模型联网调研 JSON Schema
 │   ├── probe-grade.schema.json       # 异构匿名盲评输出 JSON Schema
 │   ├── CHANGELOG.md                  # 档案修订日志
@@ -77,12 +77,12 @@ cowork/
 │   └── proposals/                    # 待人工确认的调分/别名/下架提案（跨源按字段路径去重）
 ├── references/
 │   ├── model-profiles.md             # 各主力模型优缺点与避坑指南
-│   ├── collaboration-patterns.md     # 协作模式（含三档主控感知、/swarm 单点 gatekeeper、KV 缓存与多池 LPT/SDM/TDM 协议）与模板
+│   ├── collaboration-patterns.md     # 协作模式（含 Fast-Plan Gate、三档主控感知、/swarm 单点 gatekeeper、KV 缓存与多池 LPT/SDM/TDM 协议）与模板
 │   └── research-protocol.md          # 新模型自动调研与异构交叉核验协议
 ├── scripts/
 │   ├── setup.ps1                     # 安装引导、阵容切换与 cowork-orchestrator 全局插件同步（支持 -SkipGlobalPlugin）
 │   ├── route.ps1                     # 按标签、-HostModel（三档主控感知）、-BusyAgents/-PreferIdle 与 parallel_lanes 自动派工
-│   ├── invoke-model.ps1              # 统一跨通道调用入口（三池并发槽位排队、-ContextFiles 置顶缓存、静默 .events.jsonl、cached_tokens 遥测、Cockpit 切号自愈）
+│   ├── invoke-model.ps1              # 统一跨通道调用入口（无 -OutFile 内联 response、-AutoRecordOk、三池并发槽位排队、-ContextFiles 置顶缓存、静默 .events.jsonl、cached_tokens 遥测、Cockpit 切号自愈）
 │   ├── pack-context.ps1              # 静态上下文打包与 -GitDiff + -TestLogFile (<=20行) 增量审稿打包器
 │   ├── detect-models.ps1             # 自动扫描 agy 与 Codex 目录发现新模型 / 离线模型
 │   ├── research-prompt.ps1           # 生成新模型联网调研提示词（带防并发租约）
@@ -103,9 +103,9 @@ cowork/
 
 ## 主控感知加速、多池隔离与 KV 前缀缓存协议
 
-1. **Orchestrator 规划期默认双开（`cowork-orchestrator` 全局常驻规则）**：
-   - 主控为 `Orchestrator (Carbon/Argon)` 时，**即便在只读规划 / 勘察 / 架构拆解阶段，也默认开启 `/swarm` + `/cowork`**，并行派出只读 `4H` 勘察员并经 `/cowork` 异步咨询 `GPT-6.2 Astra`，加速立项并避免单线程 Carbon 阻塞；
-   - Swarm Worker 显式定型防双跳税：编码/勘察用 `model: "gemini-4-hydrogen-xhigh"`，监控与机械扫描用 `model: "gemini-4-hydrogen-high"`，绝不无脑继承 `Orchestrator`。
+1. **Orchestrator 极速立项（Fast-Plan Gate）与执行期双开（`cowork-orchestrator` 全局常驻规则）**：
+   - **执行期双开**：非纯问答的执行任务在 `exit_plan_mode` 后交高速执行器开启 `/swarm` + `/cowork`；Swarm Worker 显式定型防双跳税（编码/勘察用 `model: "gemini-4-hydrogen-xhigh"`，监控与机械扫描用 `model: "gemini-4-hydrogen-high"`，绝不无脑继承 `Orchestrator`）；
+   - **Plan Mode 免空转（`policy.plan_external_min_unread_files = 5`，硬限 `<= 1` 轮）**：上下文已备或新读本地文件 `< 5` 个时 **0 外调**（严禁拉起 `/swarm` 或外调 `Astra`），Carbon 单轮直出计划或 `exit_plan_mode`；仅 `>= 5` 未读文件（未知大仓/硬核证明）限 `1` 轮同步聚合外调——省略 `-OutFile` 直读内联 JSON `.response`（超 `64KB` 自动溢写 `.response.md` 并设 `response_truncated=true`）+ `-AutoRecordOk` 一步记账（`outcome_recorded="ok"`），严禁挂 `schedule 35s` 看门狗、读取 `.events.jsonl` 或另跑 `record-outcome.ps1`。
 2. **三档主控感知自动分层（`route.ps1 -HostModel orchestrator|carbon|hydrogen`）**：
    - `orchestrator_fast` (`-HostModel orchestrator`)：约 80%+ 原 Carbon 负载下放 `4H Extra`，Carbon 留守架构、`paper/essay/copywriting`、`math/algorithm` 复核；
    - `carbon_peak` (`-HostModel carbon`)：Carbon 保持主力，仅大量机械/扫描/样板任务（`bulk/boilerplate/scan/test_gen`）自动分流至 `4H` **`high`** 档提速；

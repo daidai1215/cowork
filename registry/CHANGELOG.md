@@ -1,5 +1,11 @@
 # Cowork changelog
 
+## 2026-11-18T13:42:00.0000000Z - Fast-Plan Exemption Gate (`plan_external_min_unread_files = 5`), inline `response` without `-OutFile`, and `-AutoRecordOk`
+- registry_rev: 10 -> 11
+- added `policy.plan_external_min_unread_files = 5` (exempts in-context / `< 5` unread-file Plan Mode turns from external `/swarm` or `Astra` round-trips)
+- updated `invoke-model.ps1` to return inline `response` (plus `response_truncated`, spilling `>64KB` to `.response.md`) when `-OutFile` is omitted, and added `-AutoRecordOk` single-step outcome logging
+- backup: registry/history/models-20261118-214000-10-pre11.json
+
 ## 2026-11-18T12:55:00.0000000Z - Pool concurrency upgrade (`7 / 4 / 3`), AIMD Codex rotation cooldown, and 200ms launch stagger
 - registry_rev: 9 -> 10
 - updated `policy.pool_concurrency_limits` to `{ "agy_google": 7, "codex_openai": 4, "agy_anthropic": 3 }`

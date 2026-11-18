@@ -1,6 +1,6 @@
 ---
 name: cowork
-description: 【多模型协同总调度·极致性能与三档主控感知版】在 GPT-6.2 Astra（high / 攻坚 xhigh，Codex + Cockpit 自动切号）、Gemini 4 Carbon（high，极高上限）、Gemini 4 Hydrogen（4H Extra xhigh / 机械 high 快速主力）与 Claude Opus 5.5（high，严格保护仅做审美把关与精简终裁）之间智能派工；支持 Orchestrator 规划期默认双开 /swarm + /cowork、三档主控感知路由（-HostModel orchestrator|carbon|hydrogen）、KV 前缀缓存置顶与静默事件流。提及 cowork、多模型配合、多模型协作、派工、gpt-write、gpt-review、4H 快速模式、swarm 调 GPT/Opus 时触发。
+description: 【多模型协同总调度·极致性能与三档主控感知版】在 GPT-6.2 Astra（high / 攻坚 xhigh，Codex + Cockpit 自动切号）、Gemini 4 Carbon（high，极高上限）、Gemini 4 Hydrogen（4H Extra xhigh / 机械 high 快速主力）与 Claude Opus 5.5（high，严格保护仅做审美把关与精简终裁）之间智能派工；支持 Orchestrator Fast-Plan 免空转门禁（<5 未读文件 0 外调）与执行期默认双开 /swarm + /cowork、三档主控感知路由（-HostModel orchestrator|carbon|hydrogen）、KV 前缀缓存置顶与静默事件流。提及 cowork、多模型配合、多模型协作、派工、gpt-write、gpt-review、4H 快速模式、swarm 调 GPT/Opus 时触发。
 ---
 
 # cowork：多模型协同总调度
@@ -9,7 +9,7 @@ description: 【多模型协同总调度·极致性能与三档主控感知版�
 **运行时状态**：`$HOME\.cowork\`。其中 `state.json` 记录额度状态、基线与扫描时间，`usage.jsonl` 记录调用账本。
 **当前主力阵容与资源排序（由 `scripts/sync-docs.ps1` 自动同步）**：
 <!-- AUTO:ROSTER:START -->
-> 自动同步自 `registry/models.json` (`registry_rev: 10`, 活跃模型: 4)
+> 自动同步自 `registry/models.json` (`registry_rev: 11`, 活跃模型: 4)
 
 | 模型 | ID / 通道 | 默认档位 | 顶级长板（>=9） | 额度 (`quota_rank`) | 速度 (`speed_rank`) | 运行特性 |
 |---|---|---|---|---|---|---|
@@ -32,10 +32,14 @@ description: 【多模型协同总调度·极致性能与三档主控感知版�
 
 ---
 
-## 第 0 步：确认自己是谁（主控感知三档分层、规划期双开与共享池准则）
+## 第 0 步：确认自己是谁（主控感知三档分层、Fast-Plan 免空转门禁与共享池准则）
 
 **当前对话所用模型即主控**，负责只读勘察立项、契约签发、实跑验收与熔断重排。
-- **Orchestrator 规划期默认双开铁律（全局插件 `cowork-orchestrator` 常驻生效）**：当主控处于 `Orchestrator (Carbon)` 或 `Orchestrator (Argon)` 时，**即便在只读规划 / 勘察 / 架构拆解阶段，也默认开启 `/swarm`（`native_swarm`）与 `/cowork`**——并行派出只读 `4H` 勘察员并经 `/cowork` 异步咨询 `GPT-6.2 Astra`，加速立项、避免单线程 Carbon 慢速阻塞。Orchestrator 创建 Swarm Worker 时必须显式降级防双跳税：**编码/勘察/测试工指定 `model: "gemini-4-hydrogen-xhigh"`，监控（`monitor`）与机械扫描工指定 `model: "gemini-4-hydrogen-high"`**，绝不无脑继承 `Orchestrator`。
+- **Orchestrator 极速立项与执行期双开铁律（全局插件 `cowork-orchestrator` 常驻生效）**：
+  - **执行期默认双开**：非纯问答的执行任务在 `exit_plan_mode` 后由高速执行器默认开启 `/swarm`（`native_swarm`，编码/勘察/测试工显式指定 `model: "gemini-4-hydrogen-xhigh"`，监控与机械扫描工指定 `model: "gemini-4-hydrogen-high"`，绝不无脑继承 `Orchestrator` 双跳税）与 `/cowork`。
+  - **Plan Mode 免空转门禁（`policy.plan_external_min_unread_files = 5`，硬限 `<= 1` 轮工具往返）**：
+    - **豁免直出（0 外调）**：当所需材料/大纲已在当前对话上下文内，或需新读本地文件 `< 5` 个（如重排 PPT/方案逻辑、局部修改、追问微调）时，**严禁在规划回合拉起 `/swarm` 或外调 `GPT-6.2 Astra`**！Carbon 单轮直接出计划或立即 `exit_plan_mode`；
+    - **未知大仓/硬核证明例外（`>= 5` 未读文件）**：最多仅允许 **1 轮**同步聚合外调——**不传 `-OutFile`** 直接读返回 JSON `.response` 正文（`>64KB` 自动溢写 `.response.md`），必加 `-AutoRecordOk` 一步记账；**规划期严禁挂 `schedule 35s` 看门狗、严禁读取 `.events.jsonl`、严禁单独再跑一轮 `record-outcome.ps1`**。
 - **三档主控感知自动分层（`route.ps1 -HostModel orchestrator|carbon|hydrogen`）**：
   - `Orchestrator` → `-HostModel orchestrator`（`orchestrator_fast`）：约 80%+ 原 Carbon 负载下放 `4H Extra`，Carbon 仅留守架构、`paper/essay/copywriting`、`math/algorithm` 复核及 `-AllowEscalation`。
   - `Gemini 4 Carbon` → `-HostModel carbon`（`carbon_peak`）：Carbon 保留绝对主力，仅大量机械/扫描/样板任务（`bulk/boilerplate/scan/test_gen`）自动分流至 `4H` **`high`** 档提速，其余全归 Carbon。
@@ -49,7 +53,7 @@ description: 【多模型协同总调度·极致性能与三档主控感知版�
 
 | 你在哪 | 你是谁 | 怎么调用 GPT-6.2 Astra (`high` / 攻坚 `xhigh`) | 怎么调用 Carbon / 4H Extra / Opus |
 |---|---|---|---|
-| Antigravity，主控为 Orchestrator (`Carbon/Argon`) | 规划期即默认双开 `/swarm` + `/cowork` | 经单点 `gatekeeper` 或 `invoke-model.ps1 -Model gpt-6.2-astra -ContextFiles ...`（若 `run_command` 含 `BypassSandbox` 则首次传 `true`） | Swarm Worker 显式传 `gemini-4-hydrogen-xhigh`/`high`；审美终裁调 Opus；高要求文档/复核调 Carbon |
+| Antigravity，主控为 Orchestrator (`Carbon/Argon`) | Plan Mode `<=1` 轮极速立项（`<5` 未读文件 0 外调）；`exit_plan_mode` 后执行期双开 `/swarm` + `/cowork` | 经单点 `gatekeeper` 或 `invoke-model.ps1 -Model gpt-6.2-astra -ContextFiles ...`（若 `run_command` 含 `BypassSandbox` 则首次传 `true`；Plan Mode 例外需省 `-OutFile` + `-AutoRecordOk`） | Swarm Worker 显式传 `gemini-4-hydrogen-xhigh`/`high`；审美终裁调 Opus；高要求文档/复核调 Carbon |
 | Antigravity，主控为 Gemini 4 Carbon / 4H | 1M 深度勘察/长文定稿（Carbon）或高速分片（4H） | 同上 | 审美/终裁调 `claude-opus-5-5`；`hydrogen_max` 命中 `final_reviewer` 升级 `gemini-4-carbon` |
 | Antigravity，主控为 Claude Opus 5.5 | **惜用模式的总控（禁铺写长代码/长文）** | 同上 | 勘察/常规代码派 4H Extra（`gemini-4-hydrogen`）或 Carbon（`gemini-4-carbon`） |
 | Codex，主控为 GPT-6.2 Astra | 硬核实现与严谨性总控 | （自身即 6.2 Astra） | `invoke-model.ps1 -Model gemini-4-carbon` / `gemini-4-hydrogen` / `claude-opus-5-5`，**必须申请 `sandbox_permissions="require_escalated"`**，否则会误报 “not logged into Antigravity”；不要给 agy 加 `--sandbox` |
@@ -201,21 +205,22 @@ detect-models.ps1          # 24 小时内已扫描过会直接返回 {"skipped":
 ```powershell
 # 若当前 run_command 声明含 BypassSandbox 参数则传 true；无该参数的新版环境直接调用
 pack-context.ps1 -WorkDir <d> [-Files <f1,f2> | -GitDiff [-BaseRef <ref>] [-AllowedPrefixes <p>] [-TestLogFile <log>]] -OutFile <out.md>
-invoke-model.ps1 -Model <id|别名> -Access read|write -PromptFile <f> -WorkDir <d> [-ContextFiles <f1,f2>] [-Tags <tags>] [-Effort <e>] [-SlotWaitSec <n>] [-NoSlotWait] [-StreamStdout] [-ConnectTimeoutSec <n>] [-AllowCodexShell] [-StatusFile <f>] [-Resume <sid>] [-OutFile <f>] [-JsonSchema <f>] [-DryRun]
+invoke-model.ps1 -Model <id|别名> -Access read|write -PromptFile <f> -WorkDir <d> [-ContextFiles <f1,f2>] [-Tags <tags>] [-Effort <e>] [-SlotWaitSec <n>] [-NoSlotWait] [-AutoRecordOk] [-StreamStdout] [-ConnectTimeoutSec <n>] [-AllowCodexShell] [-StatusFile <f>] [-Resume <sid>] [-OutFile <f>] [-JsonSchema <f>] [-DryRun]
 extract-files.ps1 -InputFile <f> -Root <d> -AllowedPrefixes <p1,p2> [-ForbiddenPrefixes <f1,f2>] [-DryRun]
 ```
 
 - 别名与自动升/降档：支持全部模型 ID 与 `best-*` 能力别名；未显式传 `-Effort` 时，`-Tags` 命中 `peak_effort_tags`（`math`）自动升至 `xhigh`，而 `4H`（`tier=fast`）命中 `mechanical_fast_tags`（`bulk/boilerplate/scan/test_gen`）自动降至极速 `high`。
+- **无 `-OutFile` 内联响应与 `-AutoRecordOk` 一步记账**：省略 `-OutFile` 时，输出 JSON 直接内联返回 `response` 与 `response_truncated`（`<= 64000` 字符直接内联；超长自动溢写至 `$HOME\.cowork\live\<invocation_id>.response.md` 并填充 `out_file`）；传入 `-OutFile` 时保持 `response = null` 不撑爆 `stdout`。传 `-AutoRecordOk` 可在调用成功且未触发 `replan_required` 时自动一步写入 `ok` 记账并返回 `outcome_recorded="ok"`，彻底消除 Plan Mode 额外的 `record-outcome.ps1` 轮次。
 - **三池并发槽位保护、AIMD 切号门控与 200ms 错峰（`-SlotWaitSec` / `-NoSlotWait`）**：默认 `-SlotWaitSec 300`，启动前自动在 `$HOME\.cowork\slots` 申请池槽位（`agy_google <=7` / `codex_openai <=4` / `agy_anthropic <=3`），池内已有活跃进程时在锁外错峰 `~200ms`（`policy.launch_stagger_ms`）启动，防 TLS 握手尖峰与 `.codex/*.sqlite` WAL 争抢；遇 `429`/Cockpit 切号自动启用 `15s` AIMD 冷却（`codex_rotation_cooldown_sec`）收口 `codex_openai` 至 `1` 槽、`thread.started` 接通即弹回 `4` 槽；满槽进入 `queued_slot` 等待，且 **Codex 首包握手计时器（`-ConnectTimeoutSec`）在获槽之后才开始计时**；传 `-NoSlotWait` 或超时立刻以退出码 `5`（`ORCHESTRA_LOCK_TIMEOUT`）快速失败。
-- 输出末行为汇总 JSON（默认仅此 1 行到 `stdout`），包含 `effort`、`session_id`、`pool`、`slot_wait_sec`、`stagger_ms`、`events_file`、`context_files_count`、`usage`（含 `cached_tokens`、`cache_hit_rate`）、`proxy`、`codex_shell_enabled`、`startup_timeout`、`reconnect_aborted`、`status_file`、`attempts`、`account_switched`、`resume_invalidated`、`quota_error`、`replan_required`、`replan_detail`。
+- 输出末行为汇总 JSON（默认仅此 1 行到 `stdout`），包含 `effort`、`session_id`、`response`、`response_truncated`、`outcome_recorded`、`pool`、`slot_wait_sec`、`stagger_ms`、`events_file`、`context_files_count`、`usage`（含 `cached_tokens`、`cache_hit_rate`）、`proxy`、`codex_shell_enabled`、`startup_timeout`、`reconnect_aborted`、`status_file`、`attempts`、`account_switched`、`resume_invalidated`、`quota_error`、`replan_required`、`replan_detail`。
 - **熔断拦截**：若 `replan_required=true`（或 `extract-files.ps1` 返回退出码 `3`），严禁强行落盘，主控必须回到只读勘察更新 `plan_contract.md` 后重派。
-- **验收后必做**：执行 `record-outcome.ps1 -SessionId <sid> -Outcome ok|redo|fail`。
+- **验收后必做**：单轮外调若已传 `-AutoRecordOk` 则自动完成记账（`outcome_recorded="ok"`）；其余多轮或需要细粒度评级的调用在验收后执行 `record-outcome.ps1 -SessionId <sid> -Outcome ok|redo|fail`。
 
 ---
 
-## 第 5 步：35 秒阶段感知看门狗与 Cockpit 切号重连（告别黑盒盲等）
+## 第 5 步：35 秒阶段感知看门狗与 Cockpit 切号重连（仅执行期后台任务）
 
-每次通过 `run_command`（`WaitMsBeforeAsync=5000`，仅在工具声明存在 `BypassSandbox` 时传 `true`）在后台启动 `invoke-model.ps1` 后：
+> **Plan Mode 豁免**：仅在执行期通过 `run_command`（`WaitMsBeforeAsync=5000`，仅在工具声明存在 `BypassSandbox` 时传 `true`）在后台启动长耗时 `invoke-model.ps1` 时挂载本看门狗；**Plan Mode（`<5` 豁免或 `>=5` 1 轮同步聚合外调）严禁挂 `schedule 35s` 看门狗或读取 `.events.jsonl`**。
 
 1. **实时状态面板**：`invoke-model.ps1` 会实时刷新 `$HOME\.cowork\live\latest-codex.json`（或返回字段中的 `status_file`），包含当前阶段 `phase`（`queued_slot | connecting | connected | reasoning | tool_exec | responding | reconnecting | completed | failed`）、`proxy`、`elapsed_sec`、`reconnect_count`、`last_event_type`。
 2. **立即挂载 35 秒首检看门狗**（脚本本身已内置 25s 首包握手超时与 2 次重连风暴快断）：
