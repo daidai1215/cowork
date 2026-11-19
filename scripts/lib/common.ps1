@@ -399,7 +399,7 @@ function Save-State {
 function ConvertTo-BaseSlug {
     param([string]$Slug)
     if ([string]::IsNullOrWhiteSpace($Slug)) { return $null }
-    return ($Slug.Trim() -replace '-(low|medium|high|xhigh|max)$', '')
+    return ($Slug.Trim() -replace '-(low|medium|high|xhigh|max|ultra)$', '')
 }
 
 function Resolve-ModelId {
@@ -1225,6 +1225,117 @@ function Wait-CockpitQuiet {
     finally { $watch.Stop() }
 }
 
+function Get-CodexConfigCliPath {
+    param(
+        [string]$CodexHome = (Get-OrchestraCodexHome)
+    )
+    if ([string]::IsNullOrWhiteSpace($CodexHome)) { return $null }
+    $cfgFile = Join-Path $CodexHome 'config.toml'
+    if (-not [IO.File]::Exists($cfgFile)) { return $null }
+    try {
+        $lines = [IO.File]::ReadAllLines($cfgFile, $script:OrchestraUtf8)
+        foreach ($rawLine in $lines) {
+            $trimmed = ([string]$rawLine).Trim()
+            if ([string]::IsNullOrWhiteSpace($trimmed) -or $trimmed.StartsWith('#')) { continue }
+            if ($trimmed -match '^CODEX_CLI_PATH\s*=\s*(.+)$') {
+                $rhs = $Matches[1].Trim()
+                $decoded = $null
+                if ($rhs -match "^'([^']*)'\s*(?:#.*)?$") {
+                    $decoded = $Matches[1]
+                }
+                elseif ($rhs -match '^"((?:[^"\\]|\\.)*)"\s*(?:#.*)?$') {
+                    $decoded = $Matches[1].Replace('\\', '\').Replace('\"', '"')
+                }
+                if ([string]::IsNullOrWhiteSpace($decoded)) { continue }
+                $hasCtrl = $false
+                foreach ($c in $decoded.ToCharArray()) {
+                    $cc = [int][char]$c
+                    if ($cc -lt 32 -or $cc -eq 127) { $hasCtrl = $true; break }
+                }
+                if ($hasCtrl) { continue }
+                if (-not [IO.Path]::IsPathRooted($decoded)) { continue }
+                $full = [IO.Path]::GetFullPath($decoded)
+                if ([IO.Path]::GetFileName($full) -ieq 'codex.exe' -and [IO.File]::Exists($full)) {
+                    return $full
+                }
+            }
+        }
+    }
+    catch {}
+    return $null
+}
+
+function Get-CodexModelCatalogOverride {
+    param(
+        [string]$CodexHome = (Get-OrchestraCodexHome),
+        [string]$ModelSlug = '',
+        [double]$MaxAgeHours = 24.0
+    )
+    if ([string]::IsNullOrWhiteSpace($CodexHome) -or $MaxAgeHours -le 0) {
+        return [ordered]@{ applied = $false; path = $null; config_args = @(); reason = 'disabled' }
+    }
+    $cachePath = Join-Path $CodexHome 'models_cache.json'
+    if (-not [IO.File]::Exists($cachePath)) {
+        return [ordered]@{ applied = $false; path = $null; config_args = @(); reason = 'missing' }
+    }
+    $fullPath = [IO.Path]::GetFullPath($cachePath)
+    foreach ($c in $fullPath.ToCharArray()) {
+        $cc = [int][char]$c
+        if ($cc -lt 32 -or $cc -eq 127) {
+            return [ordered]@{ applied = $false; path = $null; config_args = @(); reason = 'invalid_path' }
+        }
+    }
+    try {
+        $rawText = [IO.File]::ReadAllText($fullPath, $script:OrchestraUtf8)
+        if ([string]::IsNullOrWhiteSpace($rawText)) {
+            return [ordered]@{ applied = $false; path = $fullPath; config_args = @(); reason = 'empty' }
+        }
+        $doc = $rawText | ConvertFrom-Json
+        if ($null -eq $doc) {
+            return [ordered]@{ applied = $false; path = $fullPath; config_args = @(); reason = 'invalid_json' }
+        }
+        $modelsArr = @(Get-OrchestraArray $doc 'models')
+        if ($modelsArr.Count -eq 0) {
+            return [ordered]@{ applied = $false; path = $fullPath; config_args = @(); reason = 'no_models' }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ModelSlug)) {
+            $hasSlug = $false
+            foreach ($entry in $modelsArr) {
+                if ([string](Get-OrchestraProperty $entry 'slug' '') -ceq $ModelSlug) {
+                    $hasSlug = $true
+                    break
+                }
+            }
+            if (-not $hasSlug) {
+                return [ordered]@{ applied = $false; path = $fullPath; config_args = @(); reason = 'model_not_in_catalog' }
+            }
+        }
+        $nowUtc = Get-OrchestraNow
+        $stampUtc = $null
+        $fetchedText = [string](Get-OrchestraProperty $doc 'fetched_at' '')
+        if (-not [string]::IsNullOrWhiteSpace($fetchedText)) {
+            try { $stampUtc = ConvertTo-OrchestraUtc $fetchedText } catch { $stampUtc = $null }
+        }
+        if ($null -eq $stampUtc) {
+            $stampUtc = [IO.File]::GetLastWriteTimeUtc($fullPath)
+        }
+        $ageHours = ($nowUtc - $stampUtc).TotalHours
+        if ($ageHours -gt $MaxAgeHours -or $ageHours -lt -1.0) {
+            return [ordered]@{ applied = $false; path = $fullPath; config_args = @(); reason = 'stale' }
+        }
+        $escapedPath = $fullPath.Replace('\', '\\').Replace('"', '\"')
+        return [ordered]@{
+            applied = $true
+            path = $fullPath
+            config_args = @('-c', ('model_catalog_json="' + $escapedPath + '"'))
+            reason = 'fresh'
+        }
+    }
+    catch {
+        return [ordered]@{ applied = $false; path = $fullPath; config_args = @(); reason = 'parse_error' }
+    }
+}
+
 function Resolve-CodexExe {
     param(
         [hashtable]$Paths,
@@ -1291,6 +1402,26 @@ function Resolve-CodexExe {
             if ([IO.File]::Exists($legacy)) {
                 $candidates[$legacy.ToLowerInvariant()] = $legacy
             }
+        }
+        foreach ($extRoot in @(
+            (Join-Path $HOME '.vscode\extensions'),
+            (Join-Path $HOME '.antigravity\extensions')
+        )) {
+            if ([IO.Directory]::Exists($extRoot)) {
+                try {
+                    foreach ($extDir in [IO.Directory]::GetDirectories($extRoot, 'openai.chatgpt-*')) {
+                        $file = Join-Path $extDir 'bin\windows-x86_64\codex.exe'
+                        if ([IO.File]::Exists($file)) {
+                            $candidates[$file.ToLowerInvariant()] = $file
+                        }
+                    }
+                }
+                catch {}
+            }
+        }
+        $cfgCliPath = Get-CodexConfigCliPath -CodexHome $CodexHome
+        if (-not [string]::IsNullOrWhiteSpace($cfgCliPath) -and [IO.File]::Exists($cfgCliPath)) {
+            $candidates[$cfgCliPath.ToLowerInvariant()] = $cfgCliPath
         }
         foreach ($command in @(
             Get-Command codex.exe -CommandType Application -All -ErrorAction SilentlyContinue

@@ -129,7 +129,7 @@ function Infer-ModelMetadata {
     elseif ($lower -match '(\d+(?:\.\d+)?)') {
         $gen = $Matches[1]
     }
-    $tier = if ($lower -match 'flash|mini|nano|haiku|lite') { 'fast' } else { 'flagship' }
+    $tier = if ($lower -match 'flash|mini|nano|haiku|lite|hydrogen|argon|sol') { 'fast' } else { 'flagship' }
     return @{
         vendor = $vendor
         family = $family
@@ -227,7 +227,7 @@ function Get-DiscoveredCatalog {
                         has_effort_suffix = $false
                     }
                 }
-                if ($raw -match '-(low|medium|high|xhigh|max)$') {
+                if ($raw -match '-(low|medium|high|xhigh|max|ultra)$') {
                     $eff = $Matches[1]
                     $agyByBase[$base].has_effort_suffix = $true
                     if (-not $agyByBase[$base].efforts.Contains($eff)) {
@@ -313,7 +313,7 @@ function Get-DiscoveredCatalog {
             $discEff = @($agyByBase[$id].efforts.ToArray())
             $hasSuffix = [bool]$agyByBase[$id].has_effort_suffix
             if ($discEff.Count -gt 0) {
-                $effOrder = @('low', 'medium', 'high', 'xhigh', 'max')
+                $effOrder = @('low', 'medium', 'high', 'xhigh', 'max', 'ultra')
                 $efforts = @($effOrder | Where-Object { $discEff -contains $_ })
             }
             else {
@@ -321,7 +321,7 @@ function Get-DiscoveredCatalog {
             }
         }
         elseif ($channel -eq 'codex') {
-            $efforts = @('low', 'medium', 'high', 'xhigh')
+            $efforts = @('low', 'medium', 'high', 'xhigh', 'max', 'ultra')
             $hasSuffix = $false
         }
 
@@ -389,7 +389,7 @@ function Resolve-CatalogToken {
         }
     )
     if ($substrHits.Count -eq 0) {
-        $strippedNorm = $norm -replace '(?:extra|xhigh|high|medium|low|max)$', ''
+        $strippedNorm = $norm -replace '(?:extra|ultra|xhigh|high|medium|low|max)$', ''
         if (-not [string]::IsNullOrWhiteSpace($strippedNorm) -and $strippedNorm -cne $norm) {
             $substrHits = @(
                 $CatalogItems | Where-Object {

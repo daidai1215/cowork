@@ -450,7 +450,7 @@ function Get-AgyEfforts {
     foreach ($slug in (Get-A $source 'raw_slugs')) {
         if ($slug -isnot [string]) { continue }
         if ((ConvertTo-BaseSlug -Slug $slug) -cne $Id) { continue }
-        if ($slug -cmatch '-(low|medium|high|xhigh|max)$') {
+        if ($slug -cmatch '-(low|medium|high|xhigh|max|ultra)$') {
             $found[$Matches[1]] = $true
         }
     }
@@ -460,7 +460,7 @@ function Get-AgyEfforts {
         'high'
         return
     }
-    foreach ($effort in @('low', 'medium', 'high', 'xhigh', 'max')) {
+    foreach ($effort in @('low', 'medium', 'high', 'xhigh', 'max', 'ultra')) {
         if ($found.ContainsKey($effort)) { $effort }
     }
 }
@@ -525,7 +525,7 @@ function Get-ResearchPlan {
         if ([string]::IsNullOrWhiteSpace($configuredEffort)) { $configuredEffort = 'high' }
         $modelFlag = $id
         $defaultEffort = $configuredEffort
-        $efforts = @('low', 'medium', 'high', 'xhigh')
+        $efforts = @('low', 'medium', 'high', 'xhigh', 'max', 'ultra')
         $tools = @()
         if ($channel -eq 'agy') {
             $modelFlag = $id + '-{effort}'

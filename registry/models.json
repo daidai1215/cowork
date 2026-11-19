@@ -312,6 +312,10 @@
       "lambda_q": 0.0,
       "lambda_s": 0.2
     },
+    "neon_peak": {
+      "lambda_q": 0.0,
+      "lambda_s": 0.0
+    },
     "carbon_peak": {
       "lambda_q": 0.0,
       "lambda_s": 0.0
@@ -378,9 +382,12 @@
     },
     "host_mode_map": {
       "orchestrator": "orchestrator_fast",
+      "orchestrator_neon": "orchestrator_fast",
+      "neon": "neon_peak",
       "carbon": "carbon_peak",
       "hydrogen": "hydrogen_max"
     },
+    "delivery_mode": "ship_first_async_review",
     "mechanical_fast_tags": [
       "bulk",
       "boilerplate",
@@ -893,7 +900,9 @@
           "low",
           "medium",
           "high",
-          "xhigh"
+          "xhigh",
+          "max",
+          "ultra"
         ],
         "account_rotation": true,
         "rotation_max_retries": 2,
@@ -1284,6 +1293,202 @@
           "date": "2026-11-18"
         }
       ]
+    },
+    {
+      "id": "gemini-4-neon",
+      "display_name": "Gemini 4 Neon",
+      "vendor": "google",
+      "family": "google-gemini",
+      "generation": "4",
+      "tier": "flagship",
+      "status": "active",
+      "channel": "agy",
+      "invoke": {
+        "model_flag": "gemini-4-neon-{effort}",
+        "default_effort": "high",
+        "peak_effort": "xhigh",
+        "efforts": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      "tools": [
+        "web_search",
+        "browser",
+        "long_context_1m"
+      ],
+      "quota_rank": 3,
+      "speed_rank": 2,
+      "ranks_locked": true,
+      "primary_disabled": false,
+      "escalation_only": false,
+      "escalate_to": null,
+      "fallback": [
+        "gemini-4-hydrogen",
+        "gemini-4-carbon",
+        "gpt-6.2-astra"
+      ],
+      "caps": {
+        "code_rigor": {
+          "score": 9.0,
+          "approved_score": 9.0,
+          "source": "probe",
+          "locked": false,
+          "confidence": 0.85,
+          "evidence": [
+            {
+              "url": "evals/probe/01-code-rigor.md",
+              "claim": "Empirical blind probe (2026-11-19): 14.5/15 at high (168.0s) and 15.0/15 at xhigh (286.8s); beats Carbon wall time by 1.66x across Suite B.",
+              "date": "2026-11-19"
+            }
+          ]
+        },
+        "backend": {
+          "score": 9.0,
+          "approved_score": 9.0,
+          "source": "probe",
+          "locked": false,
+          "confidence": 0.8,
+          "evidence": [
+            {
+              "url": "evals/probe/01-code-rigor.md",
+              "claim": "Empirical concurrency/DB probe (2026-11-19): caught PG FK FOR KEY SHARE deadlocks, READ COMMITTED snapshot semantics, ordered PK locking, and INT64 overflow.",
+              "date": "2026-11-19"
+            }
+          ]
+        },
+        "math": {
+          "score": 9.0,
+          "approved_score": 9.0,
+          "source": "probe",
+          "locked": false,
+          "confidence": 0.85,
+          "evidence": [
+            {
+              "url": "evals/probe/02-math.md",
+              "claim": "Empirical blind probe (2026-11-19): 15.0/15 at both high (104.7s, fastest Google flagship) and xhigh (164.7s).",
+              "date": "2026-11-19"
+            }
+          ]
+        },
+        "image_gen": {
+          "score": 0,
+          "approved_score": 0,
+          "source": "public",
+          "locked": false,
+          "confidence": 0.85,
+          "evidence": [
+            {
+              "url": "agy",
+              "claim": "No native image generation; delegate image tasks to Codex GPT-6.2 Astra.",
+              "date": "2026-11-19"
+            }
+          ]
+        },
+        "frontend_aesthetic": {
+          "score": 8.5,
+          "approved_score": 8.5,
+          "source": "public",
+          "locked": false,
+          "confidence": 0.7,
+          "evidence": [
+            {
+              "url": "agy",
+              "claim": "Upgraded Gemini 4 flagship UI draft quality above Carbon (8.0); pair with Opus 5.5 Aesthetic Gate.",
+              "date": "2026-11-19"
+            }
+          ]
+        },
+        "prose": {
+          "score": 9.5,
+          "approved_score": 9.5,
+          "source": "public",
+          "locked": false,
+          "confidence": 0.75,
+          "evidence": [
+            {
+              "url": "agy",
+              "claim": "Strong Gemini 4 flagship prose; Carbon remains locked 10 for peak literary/paper polish.",
+              "date": "2026-11-19"
+            }
+          ]
+        },
+        "world_knowledge": {
+          "score": 9.5,
+          "approved_score": 9.5,
+          "source": "public",
+          "locked": false,
+          "confidence": 0.75,
+          "evidence": [
+            {
+              "url": "agy",
+              "claim": "Broad Gemini 4 flagship world knowledge; verify citations, numbers, and API signatures via Truth Gate.",
+              "date": "2026-11-19"
+            }
+          ]
+        },
+        "long_context": {
+          "score": 10,
+          "approved_score": 10,
+          "source": "public",
+          "locked": false,
+          "confidence": 0.85,
+          "evidence": [
+            {
+              "url": "agy",
+              "claim": "1M token context window with +36% decode throughput over Carbon (~121 vs 88.4 net tok/s on 2026-11-19 benchmark).",
+              "date": "2026-11-19"
+            }
+          ]
+        },
+        "agentic_coding": {
+          "score": 9.5,
+          "approved_score": 9.5,
+          "source": "probe",
+          "locked": false,
+          "confidence": 0.85,
+          "evidence": [
+            {
+              "url": "evals/probe/01-code-rigor.md",
+              "claim": "Empirical Suite B (2026-11-19): 33.5/34 at high (347.0s) and 34.0/34 at xhigh (546.9s), incl. 4/4 OOXML structural repair in 74.2s.",
+              "date": "2026-11-19"
+            }
+          ]
+        },
+        "office_docs": {
+          "score": 6,
+          "approved_score": 6,
+          "source": "probe",
+          "locked": false,
+          "confidence": 0.7,
+          "evidence": [
+            {
+              "url": "evals/probe/01-code-rigor.md",
+              "claim": "Empirical OOXML probe (2026-11-19): 4/4 structural XML repair precision (74.2s at high); lacks Codex-native Office plugin toolchain.",
+              "date": "2026-11-19"
+            }
+          ]
+        }
+      },
+      "strengths": [
+        "New Gemini 4 flagship sweet spot: +36% faster decode than Carbon (~121 vs 88.4 net tok/s) and 1.66x faster Suite B wall time at high (33.5/34)",
+        "Meets min_cap>=9 across code_rigor, backend, and math (15/15 math & 14.5-15/15 code rigor) with 1M context and peak xhigh tier",
+        "Strong default flagship for frontend drafts, architecture/code review, and multi-file engineering when paired with 4H for bulk/scan offload"
+      ],
+      "weaknesses": [
+        "xhigh burns ~2.4x thinking tokens (+58% wall time) vs high; default to high, downshift scan/bulk to medium/4H, and reserve xhigh for math/architecture/escalation",
+        "No native image_gen or Codex Office plugin toolchain; Carbon retains locked 10 for peak literary prose"
+      ],
+      "last_researched": "2026-11-19",
+      "evidence": [
+        {
+          "url": "evals/probe/01-code-rigor.md",
+          "claim": "Empirical live benchmark (2026-11-19): Suite B 33.5/34 at high (347.0s, 14.7k think tok) and 34.0/34 at xhigh (546.9s, 35.2k think tok) vs Carbon high 34.0/34 (574.9s).",
+          "date": "2026-11-19"
+        }
+      ]
     }
   ],
   "aliases": {
@@ -1294,6 +1499,6 @@
     "best-knowledge": "gemini-4-carbon",
     "best-aesthetic": "claude-opus-5-5"
   },
-  "registry_rev": 14,
-  "updated": "2026-11-18T18:51:18.0000000Z"
+  "registry_rev": 15,
+  "updated": "2026-11-19T06:25:00.0000000Z"
 }

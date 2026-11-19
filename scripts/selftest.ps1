@@ -11,7 +11,9 @@ param(
     [string]$StateDir,
     [int]$MaxParallel = 7,
     [switch]$Serial,
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [string[]]$Only = @(),
+    [switch]$EstimateOnly
 )
 
 . (Join-Path $PSScriptRoot 'lib\common.ps1')
@@ -20,6 +22,24 @@ $script:selftestStaticPassed = 0
 $script:selftestStaticFailed = 0
 $script:selftestStaticChecks = New-Object 'System.Collections.Generic.List[object]'
 $suites = New-Object 'System.Collections.Generic.List[object]'
+
+$script:selftestEstimatedSec = 0
+$script:selftestSelectedSuites = @()
+
+function Get-SelftestSuiteEtaSec {
+    param([string]$SuiteFileName)
+    $map = @{
+        'test-apply.ps1' = 72
+        'test-detect.ps1' = 16
+        'test-invoke.ps1' = 135
+        'test-maintain.ps1' = 47
+        'test-probe.ps1' = 23
+        'test-route.ps1' = 74
+        'test-setup.ps1' = 89
+    }
+    if ($map.ContainsKey($SuiteFileName)) { return [int]$map[$SuiteFileName] }
+    return 60
+}
 
 function Add-SelftestStaticCheck {
     param([string]$Name, [bool]$Condition, [string]$Detail = '')
@@ -557,20 +577,64 @@ try {
         }
     }
 
-    if (-not $SkipTests) {
+    if (-not $SkipTests -or $EstimateOnly) {
         $testDirectory = Join-Path $paths.Root 'tests'
-        $testFiles = @(
+        $allTestFiles = @(
             Get-ChildItem -LiteralPath $testDirectory -Filter 'test-*.ps1' -File |
                 Sort-Object Name
         )
-        if ($testFiles.Count -eq 0) {
+        if ($allTestFiles.Count -eq 0) {
             throw 'No tests/test-*.ps1 suites were found.'
         }
 
+        $requestedNames = New-Object 'System.Collections.Generic.List[string]'
+        foreach ($rawItem in @($Only)) {
+            foreach ($piece in ([string]$rawItem -split ',')) {
+                $norm = $piece.Trim().ToLowerInvariant()
+                if ([string]::IsNullOrWhiteSpace($norm)) { continue }
+                if (-not [IO.Path]::GetFileName($norm).StartsWith('test-')) {
+                    $norm = 'test-' + $norm
+                }
+                if (-not $norm.EndsWith('.ps1')) {
+                    $norm = $norm + '.ps1'
+                }
+                if (-not $requestedNames.Contains($norm)) {
+                    [void]$requestedNames.Add($norm)
+                }
+            }
+        }
+        if ($requestedNames.Count -gt 0) {
+            $knownSet = @{}
+            foreach ($af in $allTestFiles) { $knownSet[$af.Name.ToLowerInvariant()] = $true }
+            foreach ($req in $requestedNames) {
+                if (-not $knownSet.ContainsKey($req)) {
+                    throw "ORCHESTRA_ARGS: Unknown test suite in -Only: $req"
+                }
+            }
+            $testFiles = @($allTestFiles | Where-Object { $requestedNames -contains $_.Name.ToLowerInvariant() })
+        }
+        else {
+            $testFiles = $allTestFiles
+        }
+
         $parallelLimit = if ($Serial) { 1 } else { [Math]::Max(1, $MaxParallel) }
-        $jobsByIndex = @(Invoke-SelftestSuitePool `
-            -TestFiles $testFiles -Paths $paths -ParallelLimit $parallelLimit `
-            -SuiteStateRoot $StateDir -TimeoutSec 300)
+        $etaValues = @(foreach ($tf in $testFiles) { Get-SelftestSuiteEtaSec -SuiteFileName $tf.Name })
+        $maxEta = 0
+        $sumEta = 0
+        foreach ($ev in $etaValues) {
+            if ($ev -gt $maxEta) { $maxEta = $ev }
+            $sumEta += $ev
+        }
+        $estSec = if ($Serial -or $parallelLimit -le 1) { $sumEta + 2 } else { $maxEta + 2 }
+        $script:selftestEstimatedSec = [int]$estSec
+        $script:selftestSelectedSuites = @($testFiles | ForEach-Object { $_.BaseName })
+        $etaDetail = @(foreach ($tf in $testFiles) { "$($tf.BaseName)=~$(Get-SelftestSuiteEtaSec -SuiteFileName $tf.Name)s" }) -join ', '
+        [Console]::Error.WriteLine("Estimated runtime: ~${estSec}s (parallel=$parallelLimit; $etaDetail)")
+
+        if (-not $EstimateOnly) {
+            $jobsByIndex = @(Invoke-SelftestSuitePool `
+                -TestFiles $testFiles -Paths $paths -ParallelLimit $parallelLimit `
+                -SuiteStateRoot $StateDir -TimeoutSec 300)
 
         for ($idx = 0; $idx -lt $testFiles.Count; $idx++) {
             $testFile = $testFiles[$idx]
@@ -682,6 +746,7 @@ try {
                 )
             }
         }
+        }
     }
 }
 catch {
@@ -706,6 +771,9 @@ foreach ($suite in $suites.ToArray()) {
 Write-OrchestraResult -Object @{
     passed = $totalPassed
     failed = $totalFailed
+    estimated_sec = $script:selftestEstimatedSec
+    selected_suites = $script:selftestSelectedSuites
+    estimate_only = [bool]$EstimateOnly
     static = @{
         passed = $script:selftestStaticPassed
         failed = $script:selftestStaticFailed

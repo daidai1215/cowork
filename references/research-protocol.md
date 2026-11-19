@@ -1,13 +1,13 @@
-# Research Protocol
+# Research Protocol (Web Capability + Local Speed Only)
 
 > Prompt template for `scripts/research-prompt.ps1` (auto-replaces `{{...}}` placeholders).
-> Command: `invoke-model.ps1 -Model best-knowledge -Access read -PromptFile <generated> -JsonSchema registry/research.schema.json -OutFile <scratch>/research-<id>.json`
+> **Policy**: Score capabilities from **online sources ONLY** (`web_search`, official model cards, Artificial Analysis, LMArena, Terminal-Bench). Locally, run at most **1 short speed/connectivity ping** (`"Reply ONLY with exact token: OK"`, ETA `~15-45s`) to check `timings_ms` and thinking ratio — **do NOT run local multi-question capability probes** (`probe-model.ps1 -Grade`).
 
 ---
 
 ## Research Prompt (Template Starts Here)
 
-You are an AI model benchmark analyst. Today is {{TODAY}}. Perform **web research** on the model below and output valid JSON matching the given schema only.
+You are an AI model benchmark analyst. Today is {{TODAY}}. Perform **web research ONLY** on the model below and output valid JSON matching the given schema only.
 
 - Target model slug: `{{MODEL_ID}}`
 - Mode: `{{MODE}}` (`new` = initial profile; `refresh` = 30-day delta refresh since last review)
@@ -15,7 +15,7 @@ You are an AI model benchmark analyst. Today is {{TODAY}}. Perform **web researc
 - Current incumbents per dimension (calibration baseline):
 {{INCUMBENTS}}
 
-### Required Sources (check >=1 per category; record misses as "not found" in `sources_checked`)
+### Required Web Sources (check >=1 per category; record misses as "not found" in `sources_checked`)
 1. **Official**: release blog, model/system card, API docs, pricing, rate limits, quotas.
 2. **Leaderboards**: Artificial Analysis (Intelligence Index, tok/s, pricing), LMArena, BenchLM.
 3. **Domain Benchmarks**:
@@ -45,10 +45,9 @@ Valid JSON matching the schema ONLY (no markdown fences or commentary).
 
 ---
 
-## Host Post-Research Steps (Outside Prompt)
+## Host Post-Research Steps (Lean)
 
-1. **Heterogeneous Cross-Check**: Pass generated JSON (read-only) to another vendor model (`GPT`): verify score/evidence consistency, URLs, and metrics; save `{"disputed":[{"cap","reason","suggested_score"}]}` to `cross-check-<id>.json`.
-2. **Host Spot Audit**: Manually `search_web` the top 3 high-impact claims (highest dimensions or claimed incumbent beats); append inaccuracies to `disputed`.
-3. **Optional Blind Probe**: Run `probe-model.ps1 -ModelId <id>` on disputed dimensions with heterogeneous grading.
-4. **Apply**: `apply-research.ps1 -ResearchFile research-<id>.json -CrossCheckFile cross-check-<id>.json`.
-5. **Report**: Summarize auto-applied changes; list `registry/proposals/*.json` paths for user approval (`apply-research.ps1 -Approve <file>`).
+1. **Pre-Run ETA**: Tell the user before any `>5s` check (`web_search` ~5-15s; optional 1-shot speed ping ~15-45s).
+2. **Optional 1-Shot Speed Ping (Local, NO Capability Probing)**: Run ONE short `invoke-model.ps1 -Model <id>` (or `-AdHocChannel <agy|codex> -AdHocModelFlag <slug>`) `-Access read -Prompt "Reply ONLY with exact token: OK"` with a temp `-StateDir` to record `timings_ms` and confirm availability. Never run `probe-model.ps1 -Grade` locally for routine scoring.
+3. **Spot Check**: Verify high-impact claims with `search_web` if any web metric looks inconsistent; skip multi-round full-file cross-checks unless sources directly conflict.
+4. **Apply**: `apply-research.ps1 -ResearchFile research-<id>.json` (or direct `models.json` registry update + `sync-docs.ps1`), then report pending `registry/proposals/*.json` if any.

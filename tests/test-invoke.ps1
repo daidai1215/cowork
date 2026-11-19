@@ -2679,6 +2679,115 @@ exit 0
         ($actIdsArr -contains 'inv-id-1') -and
         ($actIdsArr -contains 'inv-id-2')
     )
+
+    # (y) Rev 15: max/ultra effort allowlists + flagship gemini-4-neon mechanical/scan downshift
+    $rev15Reg = Read-JsonFile -Path $fixtureRegistry
+    Set-OrchestraProperty $rev15Reg.policy 'ultra_fast_tags' @('scan')
+    Set-OrchestraProperty $rev15Reg.policy 'peak_effort_tags' @('math')
+    $astra62 = New-TestModel 'gpt-6.2-astra' 'codex'
+    Set-OrchestraProperty $astra62.invoke 'efforts' @('low', 'medium', 'high', 'xhigh', 'max', 'ultra')
+    Set-OrchestraProperty $astra62.invoke 'default_effort' 'high'
+    Set-OrchestraProperty $astra62.invoke 'peak_effort' 'xhigh'
+    $neonModel = New-TestModel 'gemini-4-neon' 'agy'
+    Set-OrchestraProperty $neonModel 'tier' 'flagship'
+    Set-OrchestraProperty $neonModel.invoke 'efforts' @('low', 'medium', 'high', 'xhigh')
+    Set-OrchestraProperty $neonModel.invoke 'default_effort' 'high'
+    Set-OrchestraProperty $neonModel.invoke 'peak_effort' 'xhigh'
+    $neonXhighDef = New-TestModel 'gemini-4-neon-xdef' 'agy'
+    Set-OrchestraProperty $neonXhighDef 'tier' 'flagship'
+    Set-OrchestraProperty $neonXhighDef.invoke 'efforts' @('low', 'medium', 'high', 'xhigh')
+    Set-OrchestraProperty $neonXhighDef.invoke 'default_effort' 'xhigh'
+    Set-OrchestraProperty $neonXhighDef.invoke 'peak_effort' 'xhigh'
+    Set-OrchestraProperty $rev15Reg 'models' (@($rev15Reg.models) + @($astra62, $neonModel, $neonXhighDef))
+    $rev15RegPath = Join-Path $sandbox 'registry\models-rev15.json'
+    Write-JsonAtomic -Path $rev15RegPath -Object $rev15Reg
+    $rev15Base = @('-RegistryPath', $rev15RegPath, '-StateDir', (Join-Path $sandbox 'rev15-state'), '-WorkDir', $sandbox)
+
+    $astraMaxRun = Invoke-TestScript -Script $invokeScript -Arguments ($rev15Base + @('-Model', 'gpt-6.2-astra', '-Effort', 'max', '-Prompt', 'TEST', '-DryRun'))
+    $astraUltraRun = Invoke-TestScript -Script $invokeScript -Arguments ($rev15Base + @('-Model', 'gpt-6.2-astra', '-Effort', 'ultra', '-Prompt', 'TEST', '-DryRun'))
+    $adhocCodexMax = Invoke-TestScript -Script $invokeScript -Arguments ($rev15Base + @('-AdHocChannel', 'codex', '-AdHocModelFlag', 'gpt-6.2-sol', '-Effort', 'max', '-Prompt', 'TEST', '-DryRun'))
+    $adhocCodexUltra = Invoke-TestScript -Script $invokeScript -Arguments ($rev15Base + @('-AdHocChannel', 'codex', '-AdHocModelFlag', 'gpt-6.2-sol', '-Effort', 'ultra', '-Prompt', 'TEST', '-DryRun'))
+    $carbonUltraReject = Invoke-TestScript -Script $invokeScript -Arguments ($rev15Base + @('-Model', 'gemini-4-carbon', '-Effort', 'ultra', '-Prompt', 'TEST', '-DryRun'))
+    Assert-Test 'Rev 15 max/ultra efforts succeed on gpt-6.2-astra and ad-hoc codex, strip in ConvertTo-BaseSlug, and reject when unsupported' (
+        (ConvertTo-BaseSlug -Slug 'gpt-6.2-astra-ultra') -eq 'gpt-6.2-astra' -and
+        (ConvertTo-BaseSlug -Slug 'gpt-6.2-astra-max') -eq 'gpt-6.2-astra' -and
+        $astraMaxRun.code -eq 0 -and $astraMaxRun.json.effort -eq 'max' -and (@($astraMaxRun.json.arguments) -contains 'model_reasoning_effort="max"') -and
+        $astraUltraRun.code -eq 0 -and $astraUltraRun.json.effort -eq 'ultra' -and (@($astraUltraRun.json.arguments) -contains 'model_reasoning_effort="ultra"') -and
+        $adhocCodexMax.code -eq 0 -and $adhocCodexMax.json.effort -eq 'max' -and
+        $adhocCodexUltra.code -eq 0 -and $adhocCodexUltra.json.effort -eq 'ultra' -and
+        $carbonUltraReject.code -eq 2
+    )
+
+    $neonScanRun = Invoke-TestScript -Script $invokeScript -Arguments ($rev15Base + @('-Model', 'gemini-4-neon', '-Tags', 'scan', '-Prompt', 'TEST', '-DryRun'))
+    $neonMathRun = Invoke-TestScript -Script $invokeScript -Arguments ($rev15Base + @('-Model', 'gemini-4-neon', '-Tags', 'math', '-Prompt', 'TEST', '-DryRun'))
+    $neonXdefBulkRun = Invoke-TestScript -Script $invokeScript -Arguments ($rev15Base + @('-Model', 'gemini-4-neon-xdef', '-Tags', 'bulk', '-Prompt', 'TEST', '-DryRun'))
+    $neonXdefExplicitRun = Invoke-TestScript -Script $invokeScript -Arguments ($rev15Base + @('-Model', 'gemini-4-neon-xdef', '-Tags', 'bulk', '-Effort', 'xhigh', '-Prompt', 'TEST', '-DryRun'))
+    Assert-Test 'Rev 15 flagship gemini-4-neon downshifts scan->medium and mechanical xhigh->high while preserving math->xhigh and explicit -Effort' (
+        $neonScanRun.code -eq 0 -and $neonScanRun.json.effort -eq 'medium' -and (@($neonScanRun.json.arguments) -contains 'gemini-4-neon-medium') -and
+        $neonMathRun.code -eq 0 -and $neonMathRun.json.effort -eq 'xhigh' -and (@($neonMathRun.json.arguments) -contains 'gemini-4-neon-xhigh') -and
+        $neonXdefBulkRun.code -eq 0 -and $neonXdefBulkRun.json.effort -eq 'high' -and
+        $neonXdefExplicitRun.code -eq 0 -and $neonXdefExplicitRun.json.effort -eq 'xhigh'
+    )
+
+    # (z) Rev 15: Codex model_catalog_json cold-boot cache override and Get-CodexConfigCliPath safety
+    $catHomeFresh = Join-Path $sandbox 'rev15-cat-fresh'
+    $catHomeStale = Join-Path $sandbox 'rev15-cat-stale'
+    [void][IO.Directory]::CreateDirectory($catHomeFresh)
+    [void][IO.Directory]::CreateDirectory($catHomeStale)
+    $freshCatalogJson = @{
+        fetched_at = '2026-11-10T11:30:00Z'
+        client_version = '0.169.0'
+        models = @(@{ slug = 'gpt-6.2-astra' }, @{ slug = 'gpt-6.2-sol' })
+    }
+    $staleCatalogJson = @{
+        fetched_at = '2026-11-08T10:00:00Z'
+        client_version = '0.169.0'
+        models = @(@{ slug = 'gpt-6.2-astra' })
+    }
+    Write-JsonAtomic -Path (Join-Path $catHomeFresh 'models_cache.json') -Object $freshCatalogJson
+    Write-JsonAtomic -Path (Join-Path $catHomeStale 'models_cache.json') -Object $staleCatalogJson
+
+    $fakeCliDir = Join-Path $sandbox 'rev15-cli-bin'
+    [void][IO.Directory]::CreateDirectory($fakeCliDir)
+    $fakeCliExe = Join-Path $fakeCliDir 'codex.exe'
+    $fakeNonCodex = Join-Path $fakeCliDir 'other.exe'
+    [IO.File]::WriteAllBytes($fakeCliExe, [byte[]]@(1, 2, 3, 4))
+    [IO.File]::WriteAllBytes($fakeNonCodex, [byte[]]@(1, 2, 3, 4))
+    [IO.File]::WriteAllText((Join-Path $catHomeFresh 'config.toml'), ("CODEX_CLI_PATH = '" + $fakeCliExe + "'`n"), $script:OrchestraUtf8)
+    [IO.File]::WriteAllText((Join-Path $catHomeStale 'config.toml'), ("CODEX_CLI_PATH = '" + $fakeNonCodex + "'`n"), $script:OrchestraUtf8)
+
+    $cliPathGood = Get-CodexConfigCliPath -CodexHome $catHomeFresh
+    $cliPathBad = Get-CodexConfigCliPath -CodexHome $catHomeStale
+    $catMissSlug = Get-CodexModelCatalogOverride -CodexHome $catHomeFresh -ModelSlug 'gpt-9-unknown'
+    $catStaleRes = Get-CodexModelCatalogOverride -CodexHome $catHomeStale -ModelSlug 'gpt-6.2-astra'
+
+    $prevCodexHomeRev15 = [Environment]::GetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME')
+    $catFreshDry = $null
+    $catFullCfgDry = $null
+    $catStaleDry = $null
+    try {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME', $catHomeFresh)
+        $catFreshDry = Invoke-TestScript -Script $invokeScript -Arguments ($rev15Base + @('-Model', 'gpt-6.2-astra', '-Prompt', 'TEST', '-DryRun'))
+        $catFullCfgDry = Invoke-TestScript -Script $invokeScript -Arguments ($rev15Base + @('-Model', 'gpt-6.2-astra', '-Prompt', 'TEST', '-FullCodexConfig', '-DryRun'))
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME', $catHomeStale)
+        $catStaleDry = Invoke-TestScript -Script $invokeScript -Arguments ($rev15Base + @('-Model', 'gpt-6.2-astra', '-Prompt', 'TEST', '-DryRun'))
+    }
+    finally {
+        [Environment]::SetEnvironmentVariable('MODEL_ORCHESTRA_CODEX_HOME', $prevCodexHomeRev15)
+    }
+    $catFreshArgv = @($catFreshDry.json.arguments)
+    $catFullArgv = @($catFullCfgDry.json.arguments)
+    $hasModelCatalogArg = (@($catFreshArgv | Where-Object { [string]$_ -like 'model_catalog_json=*' }).Count -eq 1)
+    $fullHasModelCatalogArg = (@($catFullArgv | Where-Object { [string]$_ -like 'model_catalog_json=*' }).Count -gt 0)
+    Assert-Test 'Rev 15 injects model_catalog_json for fresh matching cache, skips stale/missing-slug/-FullCodexConfig, and validates CODEX_CLI_PATH' (
+        $cliPathGood -eq [IO.Path]::GetFullPath($fakeCliExe) -and
+        $null -eq $cliPathBad -and
+        (-not $catMissSlug.applied) -and $catMissSlug.reason -eq 'model_not_in_catalog' -and
+        (-not $catStaleRes.applied) -and $catStaleRes.reason -eq 'stale' -and
+        $catFreshDry.code -eq 0 -and $catFreshDry.json.codex_model_catalog_cached -eq $true -and $hasModelCatalogArg -and
+        $catFullCfgDry.code -eq 0 -and $catFullCfgDry.json.codex_model_catalog_cached -eq $false -and (-not $fullHasModelCatalogArg) -and
+        $catStaleDry.code -eq 0 -and $catStaleDry.json.codex_model_catalog_cached -eq $false
+    )
 }
 catch {
     $script:Failed++

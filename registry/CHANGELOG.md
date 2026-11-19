@@ -1,5 +1,13 @@
 # Cowork changelog
 
+## 2026-11-19T06:25:00.0000000Z - Onboard `gemini-4-neon` (`neon_peak`), `max`/`ultra` effort allowlists, and `ship_first_async_review` (`rev 15`)
+- registry_rev: 14 -> 15
+- onboarded `gemini-4-neon` (`Gemini 4 Neon`, `active`, `agy`, `default_effort="high"`, `peak_effort="xhigh"`, `quota_rank=3`, `speed_rank=2`) backed by 2026-11-19 empirical blind probes (`code_rigor=9.0`, `backend=9.0`, `math=9.0`, `agentic_coding=9.5`, `office_docs=6`, +36% decode throughput over Carbon); skipped `gemini-4-argon` and `gpt-6.2-sol`
+- expanded `gpt-6.2-astra.invoke.efforts` to `["low","medium","high","xhigh","max","ultra"]` while keeping `default_effort="high"`, `peak_effort="xhigh"`, and `claude-opus-5-5.primary_disabled=true`
+- added mode `neon_peak` (`lambda_q=0.0, lambda_s=0.0`), `policy.host_mode_map` entries (`neon: neon_peak`, `orchestrator_neon: orchestrator_fast`), and `policy.delivery_mode="ship_first_async_review"`
+- updated `route.ps1` (`-HostModel neon` & `Orchestrator (Neon)` routing, `neon_peak` mechanical offload to 4H, generalized `xhigh` scan/mechanical downshift, `delivery_mode` + `review_timing="post_delivery_async"`, `Neon` scale-out label) and effort allowlists (`max`/`ultra`) across `setup.ps1`, `probe-model.ps1`, and `apply-research.ps1`
+- backup: registry/history/models-20261119-142500-14-pre15.json
+
 ## 2026-11-18T18:51:18.0000000Z - Performance, locking & routing optimization (`rev 14`): lockless read/cache fast paths, pre-indexed telemetry, load-balance/lane guards, and 2-space LF registry
 - registry_rev: 13 -> 14
 - reformatted `registry/models.json` to compact 2-space LF indentation (`87,057` B -> `36,371` B) while keeping every model score, alias, policy, and `claude-opus-5-5.primary_disabled=true` identical

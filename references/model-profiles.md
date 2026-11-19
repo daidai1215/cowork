@@ -1,7 +1,7 @@
 # Model Profiles (Strengths & Pitfalls)
 
 <!-- AUTO:PROFILES:START -->
-> Auto-synced from `registry/models.json` (`registry_rev: 14`, active: 4)
+> Auto-synced from `registry/models.json` (`registry_rev: 15`, active: 5)
 
 ## 1. Claude Opus 5.5 (`high`) -- `anthropic` / `agy` | Review/gate only (primary disabled)
 
@@ -69,6 +69,22 @@
 **Weaknesses & Pitfalls**:
 - High-bar prose (papers/essays) and deep multi-hop knowledge (HLE) trail Carbon; xhigh has higher latency/tokens than high/medium
 - No native image_gen or Codex Office plugins; route extreme backend/math rigor to GPT-6.2 Astra
+
+---
+
+## 5. Gemini 4 Neon (`high` / peak `xhigh`) -- `google` / `agy`
+
+- **10-Dim Scores** (`*`=locked): `code_rigor`: 9, `backend`: 9, `math`: 9, `image_gen`: 0, `frontend_aesthetic`: 8.5, `prose`: 9.5, `world_knowledge`: 9.5, `long_context`: 10, `agentic_coding`: 9.5, `office_docs`: 6
+- **Quota / Speed**: `quota_rank=3`, `speed_rank=2`
+
+**Core Strengths**:
+- New Gemini 4 flagship sweet spot: +36% faster decode than Carbon (~121 vs 88.4 net tok/s) and 1.66x faster Suite B wall time at high (33.5/34)
+- Meets min_cap>=9 across code_rigor, backend, and math (15/15 math & 14.5-15/15 code rigor) with 1M context and peak xhigh tier
+- Strong default flagship for frontend drafts, architecture/code review, and multi-file engineering when paired with 4H for bulk/scan offload
+
+**Weaknesses & Pitfalls**:
+- xhigh burns ~2.4x thinking tokens (+58% wall time) vs high; default to high, downshift scan/bulk to medium/4H, and reserve xhigh for math/architecture/escalation
+- No native image_gen or Codex Office plugin toolchain; Carbon retains locked 10 for peak literary prose
 <!-- AUTO:PROFILES:END -->
 
 ---

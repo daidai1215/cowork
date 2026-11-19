@@ -271,13 +271,19 @@ exit 0
         '-RegistryPath', $caseReg, '-StateDir', $caseState
     ) 240
 
+    $targetCustomIds = @('gemini-4-neon', 'claude-sonnet-5-5', 'gpt-6-sol')
+    $initialIds = @($initialCaseRegObj.models | ForEach-Object { [string]$_.id })
+    $expectedAddedCount = @($targetCustomIds | Where-Object { $initialIds -notcontains $_ }).Count
+    $expectedRetiredCount = @($initialCaseRegObj.models | Where-Object {
+        [string]$_.status -eq 'active' -and ($targetCustomIds -notcontains [string]$_.id)
+    }).Count
     Assert-STest (
         $fullSetup.Exit -eq 0 -and
         [bool]$fullSetup.Json.docs_synced -eq $true -and
         [bool]$fullSetup.Json.doctor_healthy -eq $true -and
         -not [string]::IsNullOrWhiteSpace([string]$fullSetup.Json.backup) -and
-        @(Get-OrchestraArray $fullSetup.Json 'added_models').Count -eq 3 -and
-        @(Get-OrchestraArray $fullSetup.Json 'retired_models').Count -eq $initialActiveCount
+        @(Get-OrchestraArray $fullSetup.Json 'added_models').Count -eq $expectedAddedCount -and
+        @(Get-OrchestraArray $fullSetup.Json 'retired_models').Count -eq $expectedRetiredCount
     ) 'setup custom roster (neon, sonnet5.5, sol) with full evaluation exits 0'
 
     $updatedReg = Read-JsonFile -Path $caseReg

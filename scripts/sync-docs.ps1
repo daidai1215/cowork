@@ -277,6 +277,8 @@ function Build-RoutingBlock {
     $hostTierRows = @(
         [pscustomobject]@{ host = 'orchestrator'; mode = 'orchestrator_fast'; tags = 'frontend,landing_page' }
         [pscustomobject]@{ host = 'orchestrator'; mode = 'orchestrator_fast'; tags = 'architecture' }
+        [pscustomobject]@{ host = 'neon'; mode = 'neon_peak'; tags = 'frontend,landing_page' }
+        [pscustomobject]@{ host = 'neon'; mode = 'neon_peak'; tags = 'bulk,scan' }
         [pscustomobject]@{ host = 'carbon'; mode = 'carbon_peak'; tags = 'frontend,landing_page' }
         [pscustomobject]@{ host = 'carbon'; mode = 'carbon_peak'; tags = 'bulk,scan' }
         [pscustomobject]@{ host = 'hydrogen'; mode = 'hydrogen_max'; tags = 'bugfix' }
@@ -284,9 +286,20 @@ function Build-RoutingBlock {
     ) | Where-Object { $null -ne (Get-OrchestraProperty $modesObj $_.mode) }
 
     if (@($hostTierRows).Count -gt 0) {
+        $tierModeNames = New-Object 'System.Collections.Generic.List[string]'
+        foreach ($row in $hostTierRows) {
+            if (-not $tierModeNames.Contains($row.mode)) { [void]$tierModeNames.Add($row.mode) }
+        }
+        $tierModeList = ($tierModeNames.ToArray() | ForEach-Object { '`' + $_ + '`' }) -join '/'
+        $tierNote = if ($tierModeNames.Contains('neon_peak')) {
+            '`Neon`: `high` (`math`/`arch` `xhigh`, `bulk`/`scan`->`4H`); `4H`: `scan`->`med`, `bulk`/`boilerplate`/`test_gen`->`high`, else `xhigh`'
+        }
+        else {
+            '`4H`: `scan`->`med`, `bulk`/`boilerplate`/`test_gen`->`high`, else `xhigh`'
+        }
         [void]$lines.Add('')
         [void]$lines.Add(
-            '- **Host Tiers (`-HostModel`)**: `orchestrator_fast`/`carbon_peak`/`hydrogen_max` (`4H`: `scan`->`med`, `bulk`/`boilerplate`/`test_gen`->`high`, else `xhigh`):'
+            ('- **Host Tiers (`-HostModel`)**: {0} ({1}):' -f $tierModeList, $tierNote)
         )
         [void]$lines.Add('')
         [void]$lines.Add('|Host|`-Tags`|Primary|Reviewer|Gate|')

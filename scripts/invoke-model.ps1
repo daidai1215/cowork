@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$Model,
     [string]$AdHocChannel,
@@ -164,6 +164,7 @@ $replanDetail = $null
 $codexShellEnabled = $false
 $codexFastConfig = $false
 $codexStealthTrimmed = $false
+$codexModelCatalogCached = $false
 $codexEphemeral = $false
 $agyDirectExe = $false
 $agySlashCommandsDisabled = $false
@@ -283,10 +284,9 @@ try {
         $channel = $AdHocChannel
         $modelId = $AdHocModelFlag
         $adHocDefault = 'high'
-        $adHocEfforts = @('low', 'medium', 'high', 'xhigh')
+        $adHocEfforts = @('low', 'medium', 'high', 'xhigh', 'max', 'ultra')
         if ($channel -eq 'agy') {
-            $adHocEfforts += 'max'
-            if ($AdHocModelFlag -match '-(low|medium|high|xhigh|max)$') {
+            if ($AdHocModelFlag -match '-(low|medium|high|xhigh|max|ultra)$') {
                 $adHocDefault = $Matches[1]
                 if (-not [string]::IsNullOrWhiteSpace($Effort) -and
                     $Effort -ne $adHocDefault) {
@@ -371,7 +371,12 @@ try {
                 }
             }
             $modelTier = [string](Get-OrchestraProperty $modelObject 'tier' '')
-            if ($modelTier -eq 'fast' -and $Effort -eq 'xhigh' -and -not $hitsPeak) {
+            $downshiftEligible = (
+                ($modelTier -eq 'fast' -and $Effort -eq 'xhigh') -or
+                ($Effort -eq 'xhigh') -or
+                ($supportedEfforts -contains 'xhigh')
+            )
+            if ($downshiftEligible -and -not $hitsPeak) {
                 $rawUltra = if ($null -ne $policy) {
                     Get-OrchestraProperty $policy 'ultra_fast_tags' $null
                 }
@@ -389,7 +394,7 @@ try {
                 if ($hitsUltraOnly -and ($supportedEfforts -contains 'medium')) {
                     $Effort = 'medium'
                 }
-                elseif ($supportedEfforts -contains 'high') {
+                elseif ($Effort -eq 'xhigh' -and ($supportedEfforts -contains 'high')) {
                     $rawMech = if ($null -ne $policy) {
                         Get-OrchestraProperty $policy 'mechanical_fast_tags' $null
                     }
@@ -408,7 +413,7 @@ try {
             }
         }
     }
-    if ($Effort -notin @('low', 'medium', 'high', 'xhigh', 'max') -or
+    if ($Effort -notin @('low', 'medium', 'high', 'xhigh', 'max', 'ultra') -or
         $Effort -notin $supportedEfforts) {
         throw "ORCHESTRA_ARGS: Unsupported effort for $modelId."
     }
@@ -552,6 +557,21 @@ try {
             }
             $codexStealthTrimmed = ($stealthArgs.Count -gt 0)
         }
+        if (-not [bool]$FullCodexConfig) {
+            $catalogHome = if (-not [string]::IsNullOrWhiteSpace($codexHomePath)) {
+                $codexHomePath
+            }
+            else {
+                Get-OrchestraCodexHome
+            }
+            $catalogOverride = Get-CodexModelCatalogOverride -CodexHome $catalogHome -ModelSlug $flag
+            if ([bool]$catalogOverride.applied) {
+                foreach ($catArg in @($catalogOverride.config_args)) {
+                    [void]$arguments.Add([string]$catArg)
+                }
+                $codexModelCatalogCached = $true
+            }
+        }
         if ($codexEphemeral) {
             [void]$arguments.Add('--ephemeral')
         }
@@ -693,6 +713,7 @@ try {
             codex_shell_enabled = $codexShellEnabled
             codex_fast_config = $codexFastConfig
             codex_stealth_trimmed = [bool]$codexStealthTrimmed
+            codex_model_catalog_cached = [bool]$codexModelCatalogCached
             codex_ephemeral = $codexEphemeral
             agy_direct_exe = $agyDirectExe
             agy_slash_commands_disabled = $agySlashCommandsDisabled
@@ -1489,6 +1510,7 @@ $finalResult = @{
     codex_shell_enabled = [bool]$codexShellEnabled
     codex_fast_config = [bool]$codexFastConfig
     codex_stealth_trimmed = [bool]($codexStealthTrimmed -and ($exitCode -eq 0 -or $capture.events_count -gt 0))
+    codex_model_catalog_cached = [bool]$codexModelCatalogCached
     codex_ephemeral = [bool]$codexEphemeral
     agy_direct_exe = [bool]$agyDirectExe
     agy_slash_commands_disabled = [bool]$agySlashCommandsDisabled

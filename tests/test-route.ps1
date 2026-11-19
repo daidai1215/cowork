@@ -1221,6 +1221,67 @@ try {
             ($liveFeJson.orchestration.scale_out_hint -like 'underutilized_capacity:*') -and
             ($liveFeJson.orchestration.scale_out_hint -match 'Opus')
         ) 'backend scale_out_hint omits Opus when unselected while frontend includes Opus when selected'
+
+        # 14. Rev 15: neon_peak, Orchestrator (Neon), xhigh mechanical/scan downshift, delivery_mode/review_timing, Neon label
+        $liveNeonFeExec = Invoke-OrchestraProcess -FilePath $engine -Arguments ($liveRouteArgsBase + @('-Tags', 'frontend,landing_page', '-HostModel', 'neon')) -WorkDir $temp -TimeoutSec 60 -CaptureStdout
+        $liveOrchNeonExec = Invoke-OrchestraProcess -FilePath $engine -Arguments ($liveRouteArgsBase + @('-Tags', 'frontend,landing_page', '-HostModel', 'Orchestrator (Neon)')) -WorkDir $temp -TimeoutSec 60 -CaptureStdout
+        $liveNeonBulkScanExec = Invoke-OrchestraProcess -FilePath $engine -Arguments ($liveRouteArgsBase + @('-Tags', 'bulk,scan', '-HostModel', 'neon')) -WorkDir $temp -TimeoutSec 60 -CaptureStdout
+        $liveNeonScanNoHydExec = Invoke-OrchestraProcess -FilePath $engine -Arguments ($liveRouteArgsBase + @('-Tags', 'scan', '-HostModel', 'neon', '-Exclude', 'gemini-4-hydrogen')) -WorkDir $temp -TimeoutSec 60 -CaptureStdout
+        $liveNeonBulkNoHydExec = Invoke-OrchestraProcess -FilePath $engine -Arguments ($liveRouteArgsBase + @('-Tags', 'bulk', '-HostModel', 'neon', '-Exclude', 'gemini-4-hydrogen')) -WorkDir $temp -TimeoutSec 60 -CaptureStdout
+        $liveNeonMathNoAstraExec = Invoke-OrchestraProcess -FilePath $engine -Arguments ($liveRouteArgsBase + @('-Tags', 'math', '-HostModel', 'neon', '-Exclude', 'gpt-6.2-astra')) -WorkDir $temp -TimeoutSec 60 -CaptureStdout
+
+        $liveNeonFe = ([string](@($liveNeonFeExec.stdout | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })[0])) | ConvertFrom-Json
+        $liveOrchNeon = ([string](@($liveOrchNeonExec.stdout | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })[0])) | ConvertFrom-Json
+        $liveNeonBulkScan = ([string](@($liveNeonBulkScanExec.stdout | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })[0])) | ConvertFrom-Json
+        $liveNeonScanNoHyd = ([string](@($liveNeonScanNoHydExec.stdout | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })[0])) | ConvertFrom-Json
+        $liveNeonBulkNoHyd = ([string](@($liveNeonBulkNoHydExec.stdout | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })[0])) | ConvertFrom-Json
+        $liveNeonMathNoAstra = ([string](@($liveNeonMathNoAstraExec.stdout | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })[0])) | ConvertFrom-Json
+
+        Assert-RTest (
+            $liveNeonFeExec.exit_code -eq 0 -and
+            $liveNeonFe.mode -eq 'neon_peak' -and
+            $liveNeonFe.orchestration.host_mode -eq 'neon_peak' -and
+            $liveNeonFe.primary -eq 'gemini-4-neon' -and
+            $liveNeonFe.primary_effort -eq 'high' -and
+            $liveNeonFe.reviewer -eq 'claude-opus-5-5' -and
+            $liveNeonFe.orchestration.delivery_mode -eq 'ship_first_async_review' -and
+            $liveNeonFe.orchestration.review_timing -eq 'post_delivery_async' -and
+            ($liveNeonFe.orchestration.scale_out_hint -match '\bNeon\b')
+        ) 'HostModel neon resolves neon_peak with gemini-4-neon high, ship_first_async_review, post_delivery_async, and Neon label'
+
+        Assert-RTest (
+            $liveOrchNeonExec.exit_code -eq 0 -and
+            $liveOrchNeon.mode -eq 'orchestrator_fast' -and
+            $liveOrchNeon.orchestration.host_mode -eq 'orchestrator_fast' -and
+            $liveOrchNeon.primary -eq 'gemini-4-hydrogen' -and
+            $liveOrchNeon.primary_effort -eq 'xhigh' -and
+            [bool]$liveOrchNeon.orchestration.fast_tier_offload -eq $true
+        ) 'HostModel Orchestrator (Neon) resolves orchestrator_fast before plain neon and offloads routine work to 4H'
+
+        Assert-RTest (
+            $liveNeonBulkScanExec.exit_code -eq 0 -and
+            $liveNeonBulkScan.mode -eq 'neon_peak' -and
+            $liveNeonBulkScan.primary -eq 'gemini-4-hydrogen' -and
+            $liveNeonBulkScan.primary_effort -eq 'high' -and
+            [bool]$liveNeonBulkScan.orchestration.fast_tier_offload -eq $true -and
+            $liveNeonScanNoHydExec.exit_code -eq 0 -and
+            $liveNeonScanNoHyd.primary -eq 'gemini-4-neon' -and
+            $liveNeonScanNoHyd.primary_effort -eq 'medium' -and
+            $liveNeonBulkNoHydExec.exit_code -eq 0 -and
+            $liveNeonBulkNoHyd.primary -eq 'gemini-4-neon' -and
+            $liveNeonBulkNoHyd.primary_effort -eq 'high' -and
+            $liveNeonMathNoAstraExec.exit_code -eq 0 -and
+            $liveNeonMathNoAstra.primary -eq 'gemini-4-neon' -and
+            $liveNeonMathNoAstra.primary_effort -eq 'xhigh'
+        ) 'neon_peak offloads bulk,scan to 4H and downshifts gemini-4-neon scan->medium, bulk->high, math->xhigh'
+
+        $synOrchNeon = Invoke-RTest 'frontend,landing_page' -ModeName '' -HostModel 'Orchestrator (Neon)'
+        Assert-RTest (
+            $synOrchNeon.Exit -eq 0 -and
+            $synOrchNeon.Result.mode -eq 'orchestrator_fast' -and
+            $synOrchNeon.Result.orchestration.delivery_mode -eq 'ship_first_async_review' -and
+            $synOrchNeon.Result.orchestration.review_timing -eq 'post_delivery_async'
+        ) 'synthetic fixture maps Orchestrator (Neon) to orchestrator_fast and emits default delivery_mode/review_timing'
     }
     finally {
         Save-RTestFixture $fixture

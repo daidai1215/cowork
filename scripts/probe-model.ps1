@@ -244,15 +244,14 @@ try {
         if ([string]::IsNullOrWhiteSpace($effectiveFlag)) { $effectiveFlag = $ModelId }
         $slugEffort = $null
         if ($Channel -eq 'agy' -and
-            $effectiveFlag -match '-(low|medium|high|xhigh|max)$') {
+            $effectiveFlag -match '-(low|medium|high|xhigh|max|ultra)$') {
             $slugEffort = $Matches[1]
         }
         if ([string]::IsNullOrWhiteSpace($effectiveEffort)) {
             if ($null -ne $slugEffort) { $effectiveEffort = $slugEffort }
             else { $effectiveEffort = $policyDefaultEffort }
         }
-        if ($effectiveEffort -notin @('low', 'medium', 'high', 'xhigh', 'max') -or
-            ($Channel -eq 'codex' -and $effectiveEffort -eq 'max')) {
+        if ($effectiveEffort -notin @('low', 'medium', 'high', 'xhigh', 'max', 'ultra')) {
             throw 'ORCHESTRA_ARGS: Unsupported AdHoc effort.'
         }
         if ($null -ne $slugEffort -and $slugEffort -ne $effectiveEffort) {
@@ -284,7 +283,7 @@ try {
             $effectiveEffort = [string](Get-OrchestraProperty $invoke 'default_effort')
         }
         $supportedEfforts = @(Get-OrchestraArray $invoke 'efforts')
-        if ($effectiveEffort -notin @('low', 'medium', 'high', 'xhigh', 'max') -or
+        if ($effectiveEffort -notin @('low', 'medium', 'high', 'xhigh', 'max', 'ultra') -or
             $effectiveEffort -notin $supportedEfforts) {
             throw "ORCHESTRA_ARGS: Unsupported effort for $resolvedId."
         }
