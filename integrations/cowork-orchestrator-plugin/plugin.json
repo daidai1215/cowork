@@ -1,6 +1,6 @@
 {
   "name": "cowork-orchestrator",
-  "displayName": "Cowork Orchestrator 自动加速规则",
-  "version": "1.0.0",
-  "description": "全对话生效的 Cowork 与 Swarm 自动加速规则：Orchestrator 规划期默认双开 /swarm + /cowork（4H 勘察与 GPT-6.2 Astra 咨询），执行三档主控感知路由（orchestrator_fast / carbon_peak / hydrogen_max）及 KV 前缀缓存与静默日志铁律。"
+  "displayName": "Cowork Lite 跨平台桥接规则",
+  "version": "2.1.0",
+  "description": "轻量版 Cowork 规则：普通 Neon/Carbon + /swarm 协同，仅主智能体可异步调用（Worker 禁止），Astra 默认官方 Fast 加速 + high/xhigh，Opus 强制只读终稿审美，批量并发硬上限 <=3，默认 0 外部审核与 <3s 冒烟。"
 }
