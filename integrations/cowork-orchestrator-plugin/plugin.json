@@ -1,6 +1,6 @@
 {
   "name": "cowork-orchestrator",
-  "displayName": "Cowork Lite 跨平台桥接规则",
-  "version": "2.1.0",
-  "description": "轻量版 Cowork 规则：普通 Neon/Carbon + /swarm 协同，仅主智能体可异步调用（Worker 禁止），Astra 默认官方 Fast 加速 + high/xhigh，Opus 强制只读终稿审美，批量并发硬上限 <=3，默认 0 外部审核与 <3s 冒烟。"
+  "displayName": "Cowork Lite 智能跨平台桥接规则",
+  "version": "2.2.0",
+  "description": "轻量版 Cowork 智能调度规则：4 维语义分诊、已标定子智能体探路、卡壳 2 轮自适应升级、preferences.md 偏好沉淀、新模型一次性标定协议，配普通 Neon/Carbon 与 /swarm，Astra Fast high/xhigh、Opus 强制只读、批量 <=3 并发。"
 }

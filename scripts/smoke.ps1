@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Fast (<3s) offline smoke check for Cowork Lite: AST syntax, models.json, presets, line slicing, read-only guard, and batch <=3 cap.
+Fast (<5s) offline smoke check for Cowork Lite: AST syntax, models.json, subagent_tiers, preferences, presets, line slicing, read-only guard, and batch <=3 cap.
 #>
 [CmdletBinding()]
 param([string]$RegistryPath = '')
@@ -40,6 +40,16 @@ try {
     $regPath = Get-RegistryPath -RegistryPath $RegistryPath
     $reg = Read-JsonFile -Path $regPath
     Assert-Smoke 'models.json parses' ($null -ne $reg) $regPath
+
+    $subTiers = Get-OrchestraProperty $reg 'subagent_tiers' $null
+    $tiersObj = Get-OrchestraProperty $subTiers 'tiers' $null
+    $recResearch = [string](Get-OrchestraProperty $subTiers 'recommended_research_tier' '')
+    Assert-Smoke 'subagent_tiers calibrated' (
+        $null -ne $subTiers -and $null -ne $tiersObj -and
+        $recResearch -in @('flash', 'inherit', 'pro', 'flash_lite') -and
+        -not [string]::IsNullOrWhiteSpace([string](Get-OrchestraProperty (Get-OrchestraProperty $tiersObj 'flash') 'resolved_model' ''))
+    )
+    Assert-Smoke 'preferences.md exists' ([IO.File]::Exists((Join-Path $root 'registry\preferences.md')))
 
     $models = @(Get-OrchestraArray $reg 'models')
     Assert-Smoke 'models non-empty' ($models.Count -gt 0)
@@ -123,7 +133,7 @@ try {
     ) -WorkDir $root -TimeoutSec 15 -CaptureStdout
     Assert-Smoke 'reject opus write access' ($r4.exit_code -eq 2) "exit=$($r4.exit_code)"
 
-    # 4. Reject invalid line range & invalid effort
+    # 4. Reject invalid line range
     $r5 = Invoke-OrchestraProcess -FilePath $psExe -Arguments @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $invokeScript,
         '-Model', 'gpt-6.2-astra', '-ContextFiles', 'registry\models.json:5-1', '-Prompt', 'OK', '-DryRun', '-RegistryPath', $regPath

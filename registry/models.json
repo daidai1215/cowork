@@ -1,7 +1,38 @@
 {
   "schema_version": 2,
   "lite": true,
-  "updated": "2026-11-19",
+  "updated": "2026-11-20",
+  "subagent_tiers": {
+    "calibrated_date": "2026-11-20",
+    "recommended_research_tier": "flash",
+    "recommended_deep_tier": "inherit",
+    "tiers": {
+      "flash_lite": {
+        "resolved_model": "gemini-3.5-flash-lite",
+        "latency_sec": 7,
+        "web_benchmark": "AA ~11.7; ultra-fast legacy 3.5 lite",
+        "usage": "Trivial extraction/formatting only; avoid for codebase recon"
+      },
+      "flash": {
+        "resolved_model": "gemini-4-hydrogen-tiered-high",
+        "latency_sec": 8,
+        "web_benchmark": "AA 51, Terminal-Bench ~56-57%, 1M context",
+        "usage": "Default fast read-only research subagent for large-repo recon"
+      },
+      "pro": {
+        "resolved_model": "gemini-4-hydrogen-tiered-xhigh",
+        "latency_sec": 17,
+        "web_benchmark": "AA 54; heavy thinking overhead (not Neon/Carbon)",
+        "usage": "Prefer inherit for true flagship depth; use pro only if host is weak"
+      },
+      "inherit": {
+        "resolved_model": "host-model",
+        "latency_sec": null,
+        "web_benchmark": "Matches active host (Neon/Carbon)",
+        "usage": "Deep read-only analysis or complex subagent tasks"
+      }
+    }
+  },
   "models": [
     {
       "id": "gpt-6.2-astra",
