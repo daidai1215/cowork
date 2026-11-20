@@ -6,13 +6,8 @@
     "calibrated_date": "2026-11-20",
     "recommended_research_tier": "flash",
     "recommended_deep_tier": "inherit",
+    "disabled_tiers": ["flash_lite"],
     "tiers": {
-      "flash_lite": {
-        "resolved_model": "gemini-3.5-flash-lite",
-        "latency_sec": 7,
-        "web_benchmark": "AA ~11.7; ultra-fast legacy 3.5 lite",
-        "usage": "Trivial extraction/formatting only; avoid for codebase recon"
-      },
       "flash": {
         "resolved_model": "gemini-4-hydrogen-tiered-high",
         "latency_sec": 8,

@@ -2,7 +2,7 @@
 
 1. **动态智能调度（4 维分诊 + 原生探路 + `/swarm` 协同）**
 - **开工 4 维分诊（0 延迟）**：对非琐碎任务即时评估「能力短板 × 35s 异步重叠 ROI × 一次通过置信度 × 多模块可拆度」，复杂任务首行输出透明调度卡 `[调度] ...`。
-- **大仓原生探路**：遇陌生大仓/模糊大需求先派 1 个只读 `research` 子智能体摸底，按 `registry/models.json` 的 `subagent_tiers` 标定选档——默认 **`flash`**（实测 = `gemini-4-hydrogen-tiered-high`，~8s），深度分析用 **`inherit`**（继承 Neon/Carbon），避开 `flash_lite`（3.5 Lite）与 `pro`（4H xhigh）。
+- **大仓原生探路**：遇陌生大仓/模糊大需求先派 1 个只读 `research` 子智能体摸底，按 `registry/models.json` 的 `subagent_tiers` 标定选档——默认 **`flash`**（实测 = `gemini-4-hydrogen-tiered-high`，~8s），深度分析用 **`inherit`**（继承 Neon/Carbon），禁用 `flash_lite`，常规不用 `pro`（4H xhigh）。
 - **主控与 `/swarm` 分工**：精密编码/前端主力用普通 **Gemini 4 Neon (`High`)**；长文/论文/深度架构用普通 **Gemini 4 Carbon (`High`)**（在 Neon 接到典型长文/论文任务先 1 句提醒切 Carbon）；多模块并行开 **`/swarm`**（写代码 Worker 用 `Neon`，扫描/单测 Worker 用 `Hydrogen`，长文档用 `Carbon`）。
 - **仅主智能体调用**：无论常规对话还是 `/swarm`，只有主智能体（Coordinator）可调用 `invoke-model.ps1` / `invoke-batch.ps1`；Worker 与子智能体禁止调用 Cowork。
 

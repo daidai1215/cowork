@@ -46,7 +46,7 @@ try {
     $recResearch = [string](Get-OrchestraProperty $subTiers 'recommended_research_tier' '')
     Assert-Smoke 'subagent_tiers calibrated' (
         $null -ne $subTiers -and $null -ne $tiersObj -and
-        $recResearch -in @('flash', 'inherit', 'pro', 'flash_lite') -and
+        $recResearch -in @('flash', 'inherit', 'pro') -and
         -not [string]::IsNullOrWhiteSpace([string](Get-OrchestraProperty (Get-OrchestraProperty $tiersObj 'flash') 'resolved_model' ''))
     )
     Assert-Smoke 'preferences.md exists' ([IO.File]::Exists((Join-Path $root 'registry\preferences.md')))
